@@ -1,28 +1,41 @@
 // kernel/kernel.c
-
 #include "print.h"
 
 __attribute__((section(".text.kernel_main")))
 void kernel_main() {
-	// 1. 先在第一行打印 OS
-	put_char('O');
-	put_char('S');
+    // 1. 清理掉屏幕上 Loader 留下的 MSLP6K，让我们有一个干净的画板
+    clear_screen();
 
-	// 2. 打印换行符（测试换行 \n）
-	put_char('\n');
+    // 2. 测试完美的字符串打印与换行
+    print_string("=================================================\n");
+    print_string("  Welcome to My 64-bit OS! \n");
+    print_string("  Memory Pagination is ACTIVE.\n");
+    print_string("=================================================\n\n");
 
-	// 3. 在第二行打印 A B
-	put_char('A');
-	put_char('B');
+    // 3. 测试数字转换体系（十六进制 与 十进制）
+    unsigned long my_magic_ptr = 0x1234567890ABCDEF; // 一个 64 位的虚拟地址
+    long money = -99998888;
+    
+    print_string("[TEST] Address of my_magic_ptr: ");
+    print_hex(my_magic_ptr);
+    print_string("\n");
 
-	// 4. 打印退格符（测试退格 \b，此时 'B' 应该被删掉，光标退回到 'A' 的右边）
-	put_char('\b');
+    print_string("[TEST] Negative Decimal Number: ");
+    print_int(money);
+    print_string("\n\n");
 
-	// 5. 打印 C（测试字符覆盖，此时 'C' 应该写在原本 'B' 的位置上）
-	put_char('C');
-	put_char('\r');
-	while (1) {
-		__asm__ volatile("hlt");
-		// 内核悬停
-	}
+    // 4. 测试滚屏大冲刺（打印 30 行内容，观察前几行是否被顶上去，而且不乱码）
+    print_string("Starting scroll test...\n");
+    for (int i = 1; i <= 30; i++) {
+        print_string("This is line number ");
+        print_int(i);
+        print_string(" being printed to test screen scrolling.\n");
+    }
+
+    print_string("\n[SUCCESS] If you can read this at the bottom, your printing system is PERFECT!\n");
+
+    // 5. 内核悬停停机
+    while (1) {
+        __asm__ volatile("hlt");
+    }
 }
