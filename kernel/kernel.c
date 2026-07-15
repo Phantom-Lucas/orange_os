@@ -1,41 +1,33 @@
-// kernel/kernel.c
 #include "print.h"
+#include "idt.h"
+#include "pic.h"  // 引入你新建的 pic.h
+#include "io.h"   // 引入 outb
 
 __attribute__((section(".text.kernel_main")))
 void kernel_main() {
-    // 1. 清理掉屏幕上 Loader 留下的 MSLP6K，让我们有一个干净的画板
     clear_screen();
+    print_string("Welcome to My 64-bit OS!\n");
 
-    // 2. 测试完美的字符串打印与换行
-    print_string("=================================================\n");
-    print_string("  Welcome to My 64-bit OS! \n");
-    print_string("  Memory Pagination is ACTIVE.\n");
-    print_string("=================================================\n\n");
-
-    // 3. 测试数字转换体系（十六进制 与 十进制）
-    unsigned long my_magic_ptr = 0x1234567890ABCDEF; // 一个 64 位的虚拟地址
-    long money = -99998888;
+    // 1. 提交通讯录给 CPU
+    idt_init();
     
-    print_string("[TEST] Address of my_magic_ptr: ");
-    print_hex(my_magic_ptr);
-    print_string("\n");
+    // 2. 初始化并重映射秘书芯片 PIC
+    pic_init(); 
 
-    print_string("[TEST] Negative Decimal Number: ");
-    print_int(money);
-    print_string("\n\n");
+    // 3. 解除对时钟的屏蔽
+    // 主片的数据端口是 0x21。0xFE 的二进制是 1111 1110。
+    // 最低位(0位)对应 IRQ0(时钟)。设为 0 表示放行，其余为 1 表示继续屏蔽。
+    outb(0x21, 0xFC); 
+    
+    print_string("Timer unmasked. Enabling CPU interrupts...\n");
 
-    // 4. 测试滚屏大冲刺（打印 30 行内容，观察前几行是否被顶上去，而且不乱码）
-    print_string("Starting scroll test...\n");
-    for (int i = 1; i <= 30; i++) {
-        print_string("This is line number ");
-        print_int(i);
-        print_string(" being printed to test screen scrolling.\n");
-    }
+    // 4. STI (Set Interrupt Flag)：让 CPU 允许接收外设中断！
+    __asm__ volatile("sti"); 
 
-    print_string("\n[SUCCESS] If you can read this at the bottom, your printing system is PERFECT!\n");
+    print_string("Keyboard enabled. Start typing!\n");
 
-    // 5. 内核悬停停机
+    // 5. 内核悬停：什么都不干，就静静看着屏幕
     while (1) {
-        __asm__ volatile("hlt");
+        __asm__ volatile("hlt"); 
     }
 }
