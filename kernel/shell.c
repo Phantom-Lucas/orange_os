@@ -4,16 +4,45 @@
 #include "string.h"
 #include "print.h"
 #include "idt.h" 
-
+#include <stdint.h>
+#include "memory.h" 
+#include "kalloc.h"
 #define CMD_BUF_SIZE 256
+
 static char cmd_buffer[CMD_BUF_SIZE]; // 存放当前输入的命令字符
 static int cmd_index = 0;             // 记录当前输入了多少个字符
+
+
 
 // 初始化 shell，打印提示符
 void shell_init(void)
 {
     print_string("\nMyOS > ");
+    print_string("\n--- Testing kmalloc ---\n");
+    init_phy_mem_map(0x100000000); // 初始化物理内存位图，假设总内存为 16MB
+    kmalloc_init();
+    print_string("\n--- Testing kmalloc & kfree ---\n");
+
+    void* p1 = kmalloc(16);
+    print_string("p1 allocated at: 0x"); print_hex((uint64_t)p1); print_string("\n");
+
+    void* p2 = kmalloc(32);
+    print_string("p2 allocated at: 0x"); print_hex((uint64_t)p2); print_string("\n");
+
+    // 1. 释放 p1
+    print_string("Freeing p1...\n");
+    kfree(p1);
+
+    // 2. 再次申请 16 字节
+    void* p3 = kmalloc(16);
+    print_string("p3 (should equal p1) allocated at: 0x"); print_hex((uint64_t)p3); print_string("\n");
+
+    // 3. 释放 p2 和 p3，验证合并机制是否起效，不再报错就算成功！
+    kfree(p2);
+    kfree(p3);
+    print_string("All memory freed safely!\n");
 }
+    
 
 // 执行命令的核心逻辑
 void execute_command(char* cmd) {
@@ -118,6 +147,55 @@ void execute_command(char* cmd) {
         int a = *bad_ptr; 
         
         print_string("You will never see this line.\n");
+    }
+    // 在你的命令解析逻辑里（比如处理 "help", "clear" 的地方）加入这个：
+
+    else if (strcmp(cmd, "memtest") == 0) 
+    {
+        // 暴力强转物理地址 0x8000 为 32 位无符号整数指针，并读取它！
+        uint32_t count = *((uint32_t*)0x8000);
+        
+        // 用你现有的 print 函数打印出来（如果你有类似 printf 的函数最好了）
+        // 如果没有格式化输出，你可以先简单判断一下：
+        if (count > 0 && count < 20) {
+            print_success("WOW! e820 works! ARDS Count > 0\n");
+        } else {
+            print_error("Failed... Count is 0 or abnormal\n");
+        }
+    }
+
+    else if (strcmp(cmd, "meminfo") == 0) 
+    {
+        // 1. 读取 0x8000 处的一个 32 位整数，这是内存块的总数
+        uint32_t ards_count = *((uint32_t*)0x8000);
+        
+        // 2. 把 0x8004 强转为 ARDS 结构体数组的指针
+        struct ARDS* ards_array = (struct ARDS*)0x8004;
+        
+        // 定义一个变量，用来累加可用的总物理内存（字节）
+        uint64_t total_usable_bytes = 0;
+        
+        print_string("System Physical Memory Map:\n");
+        for(int i=0;i<ards_count;i++) 
+        {
+            struct ARDS* entry = &ards_array[i];
+            print_string("Base Address: ");
+            print_hex(entry->base_addr);
+            print_string(", Length: ");
+            print_hex(entry->length);
+            print_string(", Type: ");
+            print_int(entry->type);
+            print_string("\n");
+
+            // 如果类型是 1，表示可用内存
+            if(entry->type == 1) 
+            {
+                total_usable_bytes += entry->length;
+            }
+        }
+        print_string("Total Usable Physical Memory: ");
+        print_int(total_usable_bytes/1024/1024);
+        print_string(" MB\n");
     }
     else 
     {

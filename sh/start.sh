@@ -95,6 +95,7 @@ dd if=kernel/kernel.bin of=hd60M.img bs=512 seek=10 conv=notrunc,fdatasync
 echo "Starting QEMU..."
 qemu-system-x86_64 \
     -drive file=hd60M.img,format=raw,index=0,media=disk \
+    -m 512M \
     -d int,cpu_reset \
     -D qemu.log \
     -no-reboot \
