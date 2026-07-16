@@ -2,6 +2,9 @@
 
 #include "print.h"
 #include "io.h"
+#include "string.h"
+
+static unsigned char current_color = 0x0F;
 
 // 获取当前硬件光标的位置
 unsigned short get_cursor(void) {
@@ -44,12 +47,12 @@ void put_char(char c) {
         if (pos > 0) {
             pos--; // 退格：回退一格，并清空显存
             video_memory[pos * 2] = ' ';
-            video_memory[pos * 2 + 1] = 0x0F;
+            video_memory[pos * 2 + 1] = current_color;
         }
     } else {
         // 普通字符写入
         video_memory[pos * 2] = c;
-        video_memory[pos * 2 + 1] = 0x0F;
+        video_memory[pos * 2 + 1] = current_color;
         pos++;
     }
 
@@ -58,9 +61,7 @@ void put_char(char c) {
     // ==========================================
     if (pos >= 80 * 25) {
         // 1. 将第 2~25 行的数据（共 24 行），强制搬运到第 1~24 行
-        for (int i = 0; i < 80 * 24 * 2; i++) {
-            video_memory[i] = video_memory[i + 80 * 2];
-        }
+        memcpy(video_memory, video_memory + 80 * 2, 80 * 24 * 2);
         // 2. 将最后一行的内容用空格清空
         for (int i = 80 * 24; i < 80 * 25; i++) {
             video_memory[i * 2] = ' ';
@@ -131,4 +132,45 @@ void print_int(long val) {
         idx--;
         put_char(buffer[idx]);
     }
+}
+
+//  设置打印颜色
+void set_print_color(unsigned char fg, unsigned char bg) 
+{
+    current_color = (bg << 4) | (fg & 0x0F);
+}
+
+// 重置打印颜色为默认值
+void reset_print_color(void) 
+{
+    current_color = 0x0F;
+}
+
+//  实现语义化打印函数
+void print_error(const char* str) 
+{
+    set_print_color(VGA_LIGHT_RED, VGA_BLACK);
+    print_string(str);
+    reset_print_color(); // 打印完切回白字，防止后面的字全红了
+}
+
+void print_success(const char* str) 
+{
+    set_print_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    print_string(str);
+    reset_print_color();
+}
+
+void print_info(const char* str) 
+{
+    set_print_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    print_string(str);
+    reset_print_color();
+}
+
+void print_warning(const char* str) 
+{
+    set_print_color(VGA_YELLOW, VGA_BLACK);
+    print_string(str);
+    reset_print_color();
 }

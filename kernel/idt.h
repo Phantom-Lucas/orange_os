@@ -3,6 +3,7 @@
 #ifndef IDT_H
 #define IDT_H
 
+extern volatile unsigned long system_ticks;
 
 // 中断门描述符 (64位模式下固定 16 字节)
 struct idt_entry 
@@ -38,12 +39,17 @@ struct interrupt_frame
 // 设置中断门描述符
 void set_idt_gate(int interrupt_number, unsigned long handler_address);
 
-// 设置中断门描述符
-void set_idt_gate(int interrupt_number, unsigned long handler_address);
-
 // 除零异常处理函数
 __attribute__((interrupt))
 void isr0_divide_by_zero(struct interrupt_frame* frame);
+
+// 13 号异常：通用保护异常 (General Protection Fault)
+__attribute__((interrupt))
+void isr13_gpf(struct interrupt_frame* frame, unsigned long error_code);
+
+// 14 号异常：页错误 (Page Fault)
+__attribute__((interrupt))
+void isr14_page_fault(struct interrupt_frame* frame, unsigned long error_code);
 
 // 硬件时钟中断处理函数
 __attribute__((interrupt))

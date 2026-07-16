@@ -1,7 +1,9 @@
+// kernel/kernel.c
 #include "print.h"
 #include "idt.h"
 #include "pic.h"  // 引入你新建的 pic.h
 #include "io.h"   // 引入 outb
+#include "shell.h" // 引入 shell.h
 
 __attribute__((section(".text.kernel_main")))
 void kernel_main() {
@@ -26,7 +28,10 @@ void kernel_main() {
 
     print_string("Keyboard enabled. Start typing!\n");
 
-    // 5. 内核悬停：什么都不干，就静静看着屏幕
+    // 5. 初始化 shell，打印提示符
+    shell_init();
+    
+    // 6. 内核悬停：什么都不干，就静静看着屏幕
     while (1) {
         __asm__ volatile("hlt"); 
     }

@@ -3,6 +3,11 @@
 #include "idt.h"
 #include "print.h"
 #include "io.h"
+#include "shell.h" 
+
+
+// 全局变量：系统时钟滴答数
+volatile unsigned long system_ticks = 0;
 
 // 中断描述符表 (IDT) 的数组
 #define IDT_SIZE 256
@@ -44,10 +49,46 @@ void isr0_divide_by_zero(struct interrupt_frame* frame) {
     }
 }
 
+// 13 号异常：通用保护异常 (General Protection Fault)
+__attribute__((interrupt))
+void isr13_gpf(struct interrupt_frame* frame, unsigned long error_code)
+{
+    print_error("\n================================================\n");
+    print_error("[KERNEL PANIC] Exception 13: General Protection Fault!\n");
+    print_string("Error Code: "); print_hex(error_code); print_string("\n");
+    print_string("RIP (Crash Instruction): "); print_hex(frame->rip); print_string("\n");
+    print_error("System Halted.\n");
+    while (1) { __asm__ volatile("hlt"); }
+}
+
+// 14 号异常：页错误 (Page Fault)
+__attribute__((interrupt))
+void isr14_page_fault(struct interrupt_frame* frame, unsigned long error_code)
+{
+    // 读出 CR2 寄存器，获取导致崩溃的内存地址
+    unsigned long cr2_address;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2_address));
+
+    print_error("\n================================================\n");
+    print_error("[KERNEL PANIC] Exception 14: Page Fault!\n");
+    
+    // 打印出罪魁祸首！
+    print_string("Faulting Memory Address (CR2): "); 
+    print_hex(cr2_address); 
+    print_string("\n");
+    
+    print_string("Error Code: "); print_hex(error_code); print_string("\n");
+    print_string("RIP (Crash Instruction): "); print_hex(frame->rip); print_string("\n");
+    print_error("System Halted.\n");
+    
+    while (1) { __asm__ volatile("hlt"); }
+}
+
 // 硬件时钟中断处理函数
 __attribute__((interrupt))
 void isr32_timer(struct interrupt_frame* frame) 
 {
+    system_ticks++; 
     // 极其重要：发送 EOI (End Of Interrupt)
     // 每次处理完外设中断，必须告诉 PIC 秘书：“处理完了！”
     // 时钟连在主片上，所以向主片的命令端口 (0x20) 发送 0x20
@@ -79,7 +120,7 @@ void isr33_keyboard(struct interrupt_frame* frame) {
         
         // 如果不是空字符，就打印到屏幕上！
         if (c != 0) {
-            put_char(c);
+            shell_take_char(c); // 传给 shell 处理
         }
     }
 
@@ -101,14 +142,11 @@ void idt_init(void)
         idt[i].reserved = 0;
     }
 
-    
-    // 注册 0 号：除零异常
+
     set_idt_gate(0, (unsigned long)isr0_divide_by_zero);
-
-    // 注册 32 号：硬件时钟中断
+    set_idt_gate(13, (unsigned long)isr13_gpf);
+    set_idt_gate(14, (unsigned long)isr14_page_fault);
     set_idt_gate(32, (unsigned long)isr32_timer); 
-
-    // 注册 33 号：键盘中断
     set_idt_gate(33, (unsigned long)isr33_keyboard); 
 
 
@@ -120,3 +158,4 @@ void idt_init(void)
     __asm__ volatile("lidt %0" : : "m"(idtr_reg));
 
 }
+
