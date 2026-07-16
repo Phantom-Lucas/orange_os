@@ -24,10 +24,10 @@ void shell_init(void)
     print_string("\n--- Testing kmalloc & kfree ---\n");
 
     void* p1 = kmalloc(16);
-    print_string("p1 allocated at: 0x"); print_hex((uint64_t)p1); print_string("\n");
+    print_string("p1 allocated at:"); print_hex((uint64_t)p1); print_string("\n");
 
     void* p2 = kmalloc(32);
-    print_string("p2 allocated at: 0x"); print_hex((uint64_t)p2); print_string("\n");
+    print_string("p2 allocated at:"); print_hex((uint64_t)p2); print_string("\n");
 
     // 1. 释放 p1
     print_string("Freeing p1...\n");
@@ -35,7 +35,7 @@ void shell_init(void)
 
     // 2. 再次申请 16 字节
     void* p3 = kmalloc(16);
-    print_string("p3 (should equal p1) allocated at: 0x"); print_hex((uint64_t)p3); print_string("\n");
+    print_string("p3 (should equal p1) allocated at: "); print_hex((uint64_t)p3); print_string("\n");
 
     // 3. 释放 p2 和 p3，验证合并机制是否起效，不再报错就算成功！
     kfree(p2);
