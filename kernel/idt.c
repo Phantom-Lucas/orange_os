@@ -4,10 +4,8 @@
 #include "print.h"
 #include "io.h"
 #include "shell.h" 
+#include "timer.h"
 
-
-// 全局变量：系统时钟滴答数
-volatile unsigned long system_ticks = 0;
 
 // 中断描述符表 (IDT) 的数组
 #define IDT_SIZE 256
@@ -88,11 +86,7 @@ void isr14_page_fault(struct interrupt_frame* frame, unsigned long error_code)
 __attribute__((interrupt))
 void isr32_timer(struct interrupt_frame* frame) 
 {
-    system_ticks++; 
-    // 极其重要：发送 EOI (End Of Interrupt)
-    // 每次处理完外设中断，必须告诉 PIC 秘书：“处理完了！”
-    // 时钟连在主片上，所以向主片的命令端口 (0x20) 发送 0x20
-    outb(0x20, 0x20);
+    timer_interrupt_handler(); // 调用 timer.c 中的处理函数
 }
 
 // 极其简易的键盘扫描码 -> ASCII 码映射表 (只映射了按下时的码，忽略了 Shift/大写)

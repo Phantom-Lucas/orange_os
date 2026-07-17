@@ -3,8 +3,6 @@
 #ifndef IDT_H
 #define IDT_H
 
-extern volatile unsigned long system_ticks;
-
 // 中断门描述符 (64位模式下固定 16 字节)
 struct idt_entry 
 {

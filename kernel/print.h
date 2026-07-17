@@ -21,9 +21,7 @@
 #define VGA_WHITE         15
 
 
-unsigned short get_cursor(void); // 获取光标位置
-
-void set_cursor(unsigned short pos); // 设置光标位置
+void print_init(void);
 
 void clear_screen(void); // 清屏
 

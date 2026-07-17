@@ -8,6 +8,7 @@
 #include "memory.h" 
 #include "kalloc.h"
 #include "timer.h"
+#include "thread.h"
 #define CMD_BUF_SIZE 256
 
 static char cmd_buffer[CMD_BUF_SIZE]; // 存放当前输入的命令字符
@@ -18,24 +19,7 @@ static int cmd_index = 0;             // 记录当前输入了多少个字符
 // 初始化 shell，打印提示符
 void shell_init(void)
 {
-
-    timer_init();        // 【新增】启动 100Hz 心跳
-    init_phy_mem_map(128*1024*1024);
-    kmalloc_init();
-
-
-    
-    print_string("\n--- Testing kmalloc ---\n");
-    
-        // 申请 120,000 字节的内存（将近 120KB，大概需要 30 个连续的物理页！）
-    void* huge_ptr = kmalloc(120000); 
-    print_string("Huge memory allocated at: 0x"); 
-    print_hex((uint64_t)huge_ptr);
-    print_string("\n");
-
-    kfree(huge_ptr);
-    print_string("Huge memory safely freed!\n");
-    print_string("\nMyOS > ");
+    print_string("MyOS > ");
 }
     
 
@@ -70,7 +54,7 @@ void execute_command(char* cmd) {
     else if (strcmp(cmd, "uptime") == 0) 
     {
         // 默认 PIT 频率约 18.2 Hz，所以 ticks / 18 约等于秒数
-        unsigned long seconds = system_ticks / 18; 
+        unsigned long seconds = system_ticks / 100; 
         print_string("System Uptime: ");
         print_int(seconds);
         print_string(" seconds.\n");

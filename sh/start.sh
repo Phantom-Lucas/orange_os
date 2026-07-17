@@ -40,6 +40,11 @@ for file in kernel/*.c; do
         -c "$file" -o "${file%.c}.o"
 done
 
+nasm -f elf64 kernel/switch.S -o kernel/switch.o
+
+gcc -m64 -c kernel/gdt_flush.S -o kernel/gdt_flush.o
+gcc -m64 -c kernel/usermode.S -o kernel/usermode.o
+gcc -m64 -c kernel/syscall_entry.S -o kernel/syscall_entry.o
 # ==========================================
 # 4. 链接为 ELF 并提取 Flat Binary
 #    - 链接时增加 --build-id=none 阻止生成构建签名段

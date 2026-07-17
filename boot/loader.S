@@ -144,12 +144,12 @@ p_mode_start:
 
     ; 2. 填充第 4 级页表 PML4 (在 0x70000 处)
     ; 将 PML4 的第 0 个入口，指向第 3 级页表 PDPT (在 0x71000 处)
-    ; 属性设置为 0x03 (存在 Present + 可读写 Read/Write)
-    mov dword [0x70000], 0x71000 + 0x03
+    ; 属性设置为 0x07 (存在 Present + 可读写 Read/Write)
+    mov dword [0x70000], 0x71000 + 0x07
 
     ; 3. 填充第 3 级页表 PDPT (在 0x71000 处)
     ; 将 PDPT 的第 0 个入口，指向第 2 级页表 PD (在 0x72000 处)
-    mov dword [0x71000], 0x72000 + 0x03
+    mov dword [0x71000], 0x72000 + 0x07
 
     ; 4. 填充第 2 级页表 PD (在 0x72000 处)
     ; 我们循环填充 512 个入口，每个入口映射 2MB 的大页 (2MB * 512 = 1GB 物理内存对等映射)
@@ -159,7 +159,7 @@ p_mode_start:
 .map_pd:
     mov eax, ecx
     shl eax, 21                 ; eax = ecx * 2MB (计算当前大页的起始物理地址)
-    or eax, 0x83                ; 加上 0x83 属性位
+    or eax, 0x87                ; 加上 0x87 属性位
     mov [edi], eax              ; 写入低 32 位
     mov dword [edi+4], 0        ; 64位项，高 32 位填 0
     add edi, 8                  ; 一个 64 位页表项占用 8 字节

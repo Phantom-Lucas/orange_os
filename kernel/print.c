@@ -3,11 +3,23 @@
 #include "print.h"
 #include "io.h"
 #include "string.h"
+#include "sync.h" // 【新增】引入锁机制
 
 static unsigned char current_color = 0x0F;
 
-// 获取当前硬件光标的位置
-unsigned short get_cursor(void) {
+// 【新增】定义全局打印机锁
+mutex_t print_lock;
+
+// 【新增】初始化打印机锁 (需要在 kernel_main 最早调用)
+void print_init(void) {
+    mutex_init(&print_lock);
+}
+
+// ==========================================
+// 内部无锁基础函数 (以下函数调用前必须已获得锁)
+// ==========================================
+
+unsigned short _get_cursor(void) {
     unsigned short pos = 0;
     outb(0x3D4, 0x0E);
     pos |= ((unsigned short)inb(0x3D5)) << 8;
@@ -16,77 +28,86 @@ unsigned short get_cursor(void) {
     return pos;
 }
 
-// 设置硬件光标的位置
-void set_cursor(unsigned short pos) {
+void _set_cursor(unsigned short pos) {
     outb(0x3D4, 0x0E);
     outb(0x3D5, (unsigned char)(pos >> 8));
     outb(0x3D4, 0x0F);
     outb(0x3D5, (unsigned char)(pos & 0xFF));
 }
 
-// 清屏并将光标归零
-void clear_screen(void) {
-    char* video_memory = (char*)0xb8000UL;
-    for (int i = 0; i < 80 * 25; i++) {
-        video_memory[i * 2] = ' ';       // 字符为空格
-        video_memory[i * 2 + 1] = 0x0F;  // 属性为黑底白字
-    }
-    set_cursor(0);
-}
-
-// 打印单个字符（内置自动滚屏）
-void put_char(char c) {
-    unsigned short pos = get_cursor();
+// 内部的真正 put_char
+static void _put_char(char c) {
+    unsigned short pos = _get_cursor();
     char* video_memory = (char*)0xb8000UL;
 
     if (c == '\r') {
-        pos = (pos / 80) * 80; // 回车：回到行首
+        pos = (pos / 80) * 80;
     } else if (c == '\n') {
-        pos = (pos / 80 + 1) * 80; // 换行：下一行行首
+        pos = (pos / 80 + 1) * 80;
     } else if (c == '\b') {
         if (pos > 0) {
-            pos--; // 退格：回退一格，并清空显存
+            pos--;
             video_memory[pos * 2] = ' ';
             video_memory[pos * 2 + 1] = current_color;
         }
     } else {
-        // 普通字符写入
         video_memory[pos * 2] = c;
         video_memory[pos * 2 + 1] = current_color;
         pos++;
     }
 
-    // ==========================================
-    // 【新增】屏幕滚动逻辑 (Scroll)
-    // ==========================================
     if (pos >= 80 * 25) {
-        // 1. 将第 2~25 行的数据（共 24 行），强制搬运到第 1~24 行
         memcpy(video_memory, video_memory + 80 * 2, 80 * 24 * 2);
-        // 2. 将最后一行的内容用空格清空
         for (int i = 80 * 24; i < 80 * 25; i++) {
             video_memory[i * 2] = ' ';
             video_memory[i * 2 + 1] = 0x0F;
         }
-        // 3. 把光标强行拉回最后一行的行首
         pos = 80 * 24;
     }
-
-    set_cursor(pos);
+    _set_cursor(pos);
 }
 
-// 打印字符串
-void print_string(const char* str) {
+// 内部的真正 print_string
+static void _print_string(const char* str) {
     while (*str != '\0') {
-        put_char(*str);
+        _put_char(*str);
         str++;
     }
 }
 
-// 打印 64 位十六进制数 (会自动去除前导 0)
+// ==========================================
+// 外部安全 API (自带加锁与解锁，确保线程安全)
+// ==========================================
+
+void clear_screen(void) {
+    mutex_acquire(&print_lock);
+    char* video_memory = (char*)0xb8000UL;
+    for (int i = 0; i < 80 * 25; i++) {
+        video_memory[i * 2] = ' ';
+        video_memory[i * 2 + 1] = 0x0F;
+    }
+    _set_cursor(0);
+    mutex_release(&print_lock);
+}
+
+void put_char(char c) {
+    mutex_acquire(&print_lock);
+    _put_char(c);
+    mutex_release(&print_lock);
+}
+
+void print_string(const char* str) {
+    mutex_acquire(&print_lock);
+    _print_string(str);
+    mutex_release(&print_lock);
+}
+
 void print_hex(unsigned long val) {
-    print_string("0x");
+    mutex_acquire(&print_lock);
+    _print_string("0x");
     if (val == 0) {
-        put_char('0');
+        _put_char('0');
+        mutex_release(&print_lock);
         return;
     }
     
@@ -94,83 +115,83 @@ void print_hex(unsigned long val) {
     int idx = 0;
     const char* hex_chars = "0123456789ABCDEF";
     
-    // 提取每一位十六进制数字
     while (val > 0) {
         buffer[idx++] = hex_chars[val & 0x0F];
         val >>= 4;
     }
-    
-    // 因为提取出来是反的，所以倒序打印
     while (idx > 0) {
         idx--;
-        put_char(buffer[idx]);
+        _put_char(buffer[idx]);
     }
+    mutex_release(&print_lock);
 }
 
-// 打印十进制有符号整数
 void print_int(long val) {
+    mutex_acquire(&print_lock);
     if (val == 0) {
-        put_char('0');
+        _put_char('0');
+        mutex_release(&print_lock);
         return;
     }
     if (val < 0) {
-        put_char('-');
+        _put_char('-');
         val = -val;
     }
     
     char buffer[20];
     int idx = 0;
-    
-    // 提取每一位十进制数字
     while (val > 0) {
         buffer[idx++] = '0' + (val % 10);
         val /= 10;
     }
-    
-    // 倒序打印
     while (idx > 0) {
         idx--;
-        put_char(buffer[idx]);
+        _put_char(buffer[idx]);
     }
+    mutex_release(&print_lock);
 }
 
-//  设置打印颜色
-void set_print_color(unsigned char fg, unsigned char bg) 
-{
+// 颜色设置保留为公开接口，但建议在多任务环境下尽量使用下面的语义化函数
+void set_print_color(unsigned char fg, unsigned char bg) {
     current_color = (bg << 4) | (fg & 0x0F);
 }
 
-// 重置打印颜色为默认值
-void reset_print_color(void) 
-{
+void reset_print_color(void) {
     current_color = 0x0F;
 }
 
-//  实现语义化打印函数
-void print_error(const char* str) 
-{
-    set_print_color(VGA_LIGHT_RED, VGA_BLACK);
-    print_string(str);
-    reset_print_color(); // 打印完切回白字，防止后面的字全红了
+// ==========================================
+// 语义化安全打印 (把变色、打印、恢复颜色打包成一个绝对不被打断的原子操作！)
+// ==========================================
+
+void print_error(const char* str) {
+    mutex_acquire(&print_lock);
+    current_color = (0x00 << 4) | (0x0C & 0x0F); // 假设 0x00 黑底，0x0C 亮红
+    _print_string(str);
+    current_color = 0x0F;
+    mutex_release(&print_lock);
 }
 
-void print_success(const char* str) 
-{
-    set_print_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    print_string(str);
-    reset_print_color();
+void print_success(const char* str) {
+    mutex_acquire(&print_lock);
+    current_color = (0x00 << 4) | (0x0A & 0x0F); // 0x0A 亮绿
+    _print_string(str);
+    current_color = 0x0F;
+    mutex_release(&print_lock);
 }
 
-void print_info(const char* str) 
-{
-    set_print_color(VGA_LIGHT_CYAN, VGA_BLACK);
-    print_string(str);
-    reset_print_color();
+void print_info(const char* str) {
+    mutex_acquire(&print_lock);
+    current_color = (0x00 << 4) | (0x0B & 0x0F); // 0x0B 亮青
+    _print_string(str);
+    current_color = 0x0F;
+    mutex_release(&print_lock);
 }
 
-void print_warning(const char* str) 
-{
-    set_print_color(VGA_YELLOW, VGA_BLACK);
-    print_string(str);
-    reset_print_color();
+void print_warning(const char* str) {
+    mutex_acquire(&print_lock);
+    current_color = (0x00 << 4) | (0x0E & 0x0F); // 0x0E 黄色
+    _print_string(str);
+    current_color = 0x0F;
+    mutex_release(&print_lock);
 }
