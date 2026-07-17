@@ -33,6 +33,9 @@ void set_bit(Bitmap* bitmap, uint64_t index, uint8_t value);
 // 获取位图中某一位的值
 uint8_t get_bit(Bitmap* bitmap, uint64_t index);
 
+//  分配指定数量的连续物理页，返回其物理地址
+void* alloc_pages(uint32_t page_count);
+
 // 分配一个物理页，返回其物理地址
 void* alloc_page();
 

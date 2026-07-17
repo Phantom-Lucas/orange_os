@@ -81,18 +81,46 @@ uint8_t get_bit(Bitmap* bitmap, uint64_t index)
     return (bitmap->bits[byte_index] >> bit_index) & 1;
 }
 
-// 分配一个物理页，返回其物理地址
-void* alloc_page() {
-    // 遍历位图，找到第一个为 0 的位
-    for (uint64_t i = 0; i < phy_mem_map.bmap_bytes * 8; i++) {
-        if (get_bit(&phy_mem_map, i) == 0) {
-            // 找到空闲页，标记为已占用
-            set_bit(&phy_mem_map, i, 1);
-            // 返回该页的物理地址
-            return (void*)(i * 4096); // 页大小为 4KB
+// 分配物理页，返回其物理地址
+// kernel/memory.c 新增代码
+
+// 核心算法：在物理内存中寻找连续的 N 个空闲页
+void* alloc_pages(uint32_t page_count) {
+    if (page_count == 0) return NULL;
+    
+    uint32_t consecutive_free = 0; // 记录连续找到了几个空闲页
+    uint32_t start_page = 0;       // 记录这片连续区域的起始页号
+    uint32_t total_pages = phy_mem_map.bmap_bytes * 8; // 位图里的总页数
+
+    // 遍历整个位图，寻找连续的 0
+    for (uint32_t i = 0; i < total_pages; i++) {
+        if (get_bit(&phy_mem_map, i) == 0) { // 发现一个空闲页
+            if (consecutive_free == 0) {
+                start_page = i; // 记录连续区域的起点
+            }
+            consecutive_free++;
+            
+            // 如果连续空闲的数量已经达到了要求
+            if (consecutive_free == page_count) {
+                // 找到了！把这连续的 N 页全部标记为占用 (1)
+                for (uint32_t j = 0; j < page_count; j++) {
+                    set_bit(&phy_mem_map, start_page + j, 1);
+                }
+                // 返回这片连续物理内存的首地址
+                return (void*)((uint64_t)start_page * 4096);
+            }
+        } else {
+            // 中间遇到了被占用的页（暗礁），连续被打断，重新计数
+            consecutive_free = 0; 
         }
     }
-    return (void*)0; // 没有可用页，返回 NULL
+    
+    return NULL; // 如果找遍了全地图都没有这么大的连续空间，返回 NULL (OOM)
+}
+
+// 为了兼容你之前的代码，我们保留 alloc_page，让它直接调用 alloc_pages(1)
+void* alloc_page(void) {
+    return alloc_pages(1);
 }
 
 // 释放一个物理页
