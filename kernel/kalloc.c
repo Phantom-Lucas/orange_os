@@ -9,14 +9,15 @@ struct MemBlock* heap_head = NULL;
 
 void kmalloc_init(void)
 {
-    // 找底层批发一块 4KB 内存
+    // 找底层批发一块 4KB 内存 (返回纯物理地址)
     void* first_page = alloc_page();
     if (first_page == NULL) {
         print_string("PANIC: kmalloc_init failed to get a physical page!\n");
         return; 
     }
 
-    heap_head = (struct MemBlock*)first_page;
+    // 【修复点】：将物理页转换成高半区虚拟地址，供内核 C 语言操作
+    heap_head = (struct MemBlock*)P2V(first_page);
     heap_head->size = 4096 - sizeof(struct MemBlock); 
     heap_head->is_free = true;
     heap_head->next = NULL; 
@@ -65,7 +66,7 @@ void* kmalloc(size_t size)
     void* new_pages = alloc_pages(pages_needed);
     
     if (new_pages != NULL) {
-        struct MemBlock* new_block = (struct MemBlock*)new_pages;
+        struct MemBlock* new_block = (struct MemBlock*)P2V(new_pages);
         new_block->size = (pages_needed * 4096) - sizeof(struct MemBlock);
         new_block->is_free = true;
         new_block->next = NULL;

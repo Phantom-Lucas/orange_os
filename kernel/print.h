@@ -20,7 +20,6 @@
 #define VGA_YELLOW        14
 #define VGA_WHITE         15
 
-
 void print_init(void);
 
 void clear_screen(void); // 清屏
@@ -44,5 +43,11 @@ void print_success(const char* str);  // 亮绿色
 void print_info(const char* str);     // 亮青色
 
 void print_warning(const char* str);  // 黄色
+
+void panic_print(const char* str);
+
+void panic_print_hex(unsigned long val);
+
+void panic_print_int(long val);
 
 #endif

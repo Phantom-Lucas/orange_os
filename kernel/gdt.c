@@ -51,6 +51,7 @@ void write_tss(int index) {
     gdt_entries[index + 1] = ((uint64_t)&tss) >> 32;
 }
 
+
 void gdt_init() {
     gdt_ptr.limit = sizeof(gdt_entries) - 1;
     gdt_ptr.base = (uint64_t)&gdt_entries;
@@ -61,14 +62,17 @@ void gdt_init() {
     // 0x08: 内核代码段 (Ring 0, 64-bit, Exec/Read) -> Flag: 0x00AF98000000FFFF
     set_gdt_entry(1, 0x00AF98000000FFFF); 
 
-    // 0x10: 内核数据段 (Ring 0, Read/Write)      -> Flag: 0x00AF92000000FFFF
-    set_gdt_entry(2, 0x00AF92000000FFFF); 
+    // 0x10: 内核数据段 (Ring 0, Read/Write) -> Flag: 0x00CF92000000FFFF
+    // (已修复 L 位)
+    set_gdt_entry(2, 0x00CF92000000FFFF); 
 
-    // 0x18: 用户数据段 (Ring 3, Read/Write, DPL=3) -> Flag: 0x00AFF2000000FFFF
-    set_gdt_entry(3, 0x00AFF2000000FFFF); 
+    // 0x18: 用户数据段 (Ring 3, Read/Write, DPL=3) -> Flag: 0x00CFF2000000FFFF
+    // (已修复 L 位)
+    set_gdt_entry(3, 0x00CFF2000000FFFF); 
 
-    // 0x20: 用户代码段 (Ring 3, 64-bit, Exec/Read, DPL=3) -> Flag: 0x00AFF8000000FFFF
-    set_gdt_entry(4, 0x00AFF8000000FFFF); 
+    // 0x20: 用户代码段 (Ring 3, 64-bit, Exec/Read, DPL=3) -> Flag: 0x00AFFA000000FFFF
+    // 【终极修复】：将 F8 改为 FA (表示 Executable & Readable)，防止部分 QEMU 版本拦截不可读代码段引发异常！
+    set_gdt_entry(4, 0x00AFFA000000FFFF); 
 
     // 0x28 & 0x30: TSS 段
     write_tss(5);

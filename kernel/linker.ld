@@ -1,43 +1,39 @@
+/* kernel/linker.ld */
 ENTRY(kernel_main)
-OUTPUT_FORMAT("elf64-x86-64")
+
+/* 定义高半区虚拟基址常量 */
+KERNEL_VMA = 0xFFFF800000000000;
+/* 内核实际存放在内存中的物理地址 */
+KERNEL_LMA = 0x1900;
 
 SECTIONS
 {
-    /* 强制内核起始物理地址为 0x1900 */
-    . = 0x1900;
+    /* 设置当前虚拟地址计数器 */
+    . = KERNEL_VMA + KERNEL_LMA;
 
-    .text : {
-        /* 1. 强制将入口函数的专属段排在 0x1900 最前端 */
-        *(.text.kernel_main)
+    /* AT() 关键字告诉加载器这部分代码实际的物理存放地址 */
+    .text : AT(ADDR(.text) - KERNEL_VMA)
+    {
+        /* 【绝对核心修复】：强制提取入口函数，钉在二进制的第 1 个字节！ */
+        *(.entry_point)
         
-        /* 2. 随后才是其他所有普通的 text 段 */
-        *(.text)
-        *(.text.*)
+        /* 其他普通代码紧随其后 */
+        *(.text*)
     }
 
-    .rodata : {
-        *(.rodata)
-        *(.rodata.*)
+    .rodata : AT(ADDR(.rodata) - KERNEL_VMA)
+    {
+        *(.rodata*)
     }
 
-    .data : {
-        *(.data)
-        *(.data.*)
+    .data : AT(ADDR(.data) - KERNEL_VMA)
+    {
+        *(.data*)
     }
 
-    .bss : {
-        *(.bss)
-        *(.bss.*)
+    .bss : AT(ADDR(.bss) - KERNEL_VMA)
+    {
         *(COMMON)
-    }
-
-    /* === 核心修复：丢弃所有妨碍裸机运行的无用 note、comment 和 eh_frame 段 === */
-    /DISCARD/ : {
-        *(.note.gnu.property)
-        *(.note.GNU-stack)
-        *(.note.*)
-        *(.eh_frame)
-        *(.eh_frame_hdr)
-        *(.comment)
+        *(.bss*)
     }
 }

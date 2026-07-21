@@ -24,38 +24,28 @@ void set_idt_gate(int interrupt_number, unsigned long handler_address)
     idt[interrupt_number].reserved = 0;
 }
 
-// 除零异常处理函数
+// 0 号异常：除零异常处理函数
 __attribute__((interrupt))
 void isr0_divide_by_zero(struct interrupt_frame* frame) {
-    // 1. (可选) 清个屏，让红底白字或者显眼的报错信息霸占屏幕
-    // clear_screen(); 
-
-    // 2. 打印报错信息
-    print_string("\n================================================\n");
-    print_string("[KERNEL PANIC] Exception 0: Divide by Zero!\n");
-    
-    // 3. 提取法医现场的证据：打印崩溃时的 RIP 地址
-    print_string("Crash Instruction Address (RIP): ");
-    print_hex(frame->rip);
-    print_string("\n");
-    print_string("================================================\n");
-    print_string("System Halted.\n");
-
-    // 4. 彻底锁死 CPU，防止它继续乱跑执行错误代码
-    while (1) {
-        __asm__ volatile("hlt");
-    }
+    panic_print("\n================================================\n");
+    panic_print("[KERNEL PANIC] Exception 0: Divide by Zero!\n");
+    panic_print("Crash Instruction Address (RIP): ");
+    panic_print_hex(frame->rip);
+    panic_print("\n================================================\n");
+    panic_print("System Halted.\n");
+    while (1) { __asm__ volatile("hlt"); }
 }
 
 // 13 号异常：通用保护异常 (General Protection Fault)
 __attribute__((interrupt))
 void isr13_gpf(struct interrupt_frame* frame, unsigned long error_code)
 {
-    print_error("\n================================================\n");
-    print_error("[KERNEL PANIC] Exception 13: General Protection Fault!\n");
-    print_string("Error Code: "); print_hex(error_code); print_string("\n");
-    print_string("RIP (Crash Instruction): "); print_hex(frame->rip); print_string("\n");
-    print_error("System Halted.\n");
+    panic_print("\n================================================\n");
+    panic_print("[KERNEL PANIC] Exception 13: General Protection Fault!\n");
+    panic_print("Error Code: "); panic_print_hex(error_code); panic_print("\n");
+    panic_print("RIP (Crash Instruction): "); panic_print_hex(frame->rip); panic_print("\n");
+    panic_print("================================================\n");
+    panic_print("System Halted.\n");
     while (1) { __asm__ volatile("hlt"); }
 }
 
@@ -63,22 +53,16 @@ void isr13_gpf(struct interrupt_frame* frame, unsigned long error_code)
 __attribute__((interrupt))
 void isr14_page_fault(struct interrupt_frame* frame, unsigned long error_code)
 {
-    // 读出 CR2 寄存器，获取导致崩溃的内存地址
     unsigned long cr2_address;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2_address));
 
-    print_error("\n================================================\n");
-    print_error("[KERNEL PANIC] Exception 14: Page Fault!\n");
-    
-    // 打印出罪魁祸首！
-    print_string("Faulting Memory Address (CR2): "); 
-    print_hex(cr2_address); 
-    print_string("\n");
-    
-    print_string("Error Code: "); print_hex(error_code); print_string("\n");
-    print_string("RIP (Crash Instruction): "); print_hex(frame->rip); print_string("\n");
-    print_error("System Halted.\n");
-    
+    panic_print("\n================================================\n");
+    panic_print("[KERNEL PANIC] Exception 14: Page Fault!\n");
+    panic_print("Faulting Memory Address (CR2): "); panic_print_hex(cr2_address); panic_print("\n");
+    panic_print("Error Code: "); panic_print_hex(error_code); panic_print("\n");
+    panic_print("RIP (Crash Instruction): "); panic_print_hex(frame->rip); panic_print("\n");
+    panic_print("================================================\n");
+    panic_print("System Halted.\n");
     while (1) { __asm__ volatile("hlt"); }
 }
 

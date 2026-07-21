@@ -20,7 +20,7 @@ get_file_size() {
 # ==========================================
 # 1. 自动清理旧的编译残留
 # ==========================================
-rm -f boot/*.bin kernel/*.o kernel/*.bin kernel/*.elf kernel/*.asm qemu.log
+rm -f boot/*.bin kernel/*.o kernel/*.bin kernel/*.elf kernel/*.asm qemu.log hello.elf fs.img
 
 # ==========================================
 # 2. 编译 MBR 与 Loader
@@ -31,10 +31,10 @@ nasm -o boot/loader.bin boot/loader.S
 # ==========================================
 # 3. 编译：循环独立编译 kernel/ 目录下的所有 C 文件
 # ==========================================
-# 修改 build.sh 中的 GCC 编译命令，加入 -fcf-protection=none
 for file in kernel/*.c; do
     echo "Compiling $file..."
-    gcc -m64 -ffreestanding -O2 -g -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
+    # 增加 -mcmodel=large 允许使用 64 位绝对地址
+    gcc -m64 -mcmodel=large -ffreestanding -O2 -g -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
         -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables \
         -fcf-protection=none \
         -c "$file" -o "${file%.c}.o"
@@ -42,13 +42,13 @@ done
 
 nasm -f elf64 kernel/switch.S -o kernel/switch.o
 
-gcc -m64 -c kernel/gdt_flush.S -o kernel/gdt_flush.o
-gcc -m64 -c kernel/usermode.S -o kernel/usermode.o
-gcc -m64 -c kernel/syscall_entry.S -o kernel/syscall_entry.o
+# 汇编文件如果包含 C 函数调用或外部变量引用，也必须加上 -mcmodel=large
+gcc -m64 -mcmodel=large -c kernel/gdt_flush.S -o kernel/gdt_flush.o
+gcc -m64 -mcmodel=large -c kernel/usermode.S -o kernel/usermode.o
+gcc -m64 -mcmodel=large -c kernel/syscall_entry.S -o kernel/syscall_entry.o
+
 # ==========================================
 # 4. 链接为 ELF 并提取 Flat Binary
-#    - 链接时增加 --build-id=none 阻止生成构建签名段
-#    - 提取时增加 -R 强制删除无用的 note/eh_frame 段
 # ==========================================
 OBJ_FILES=$(ls kernel/*.o)
 echo "Linking object files: $OBJ_FILES"
@@ -64,7 +64,7 @@ objcopy -O binary \
     kernel/kernel.elf kernel/kernel.bin
 
 # ==========================================
-# 安全检查与文件体积输出（帮您直观排查零填充）
+# 安全检查与文件体积输出
 # ==========================================
 LOADER_SIZE=$(get_file_size "boot/loader.bin")
 KERNEL_SIZE=$(get_file_size "kernel/kernel.bin")
@@ -87,7 +87,7 @@ if [ "$KERNEL_SIZE" -gt "$MAX_KERNEL_SIZE" ]; then
 fi
 
 # ==========================================
-# 5. 烧录到虚拟硬盘镜像 hd60M.img 中
+# 5. 烧录内核到虚拟硬盘镜像 hd60M.img 中
 # ==========================================
 echo "Writing binary files to disk image..."
 dd if=boot/mbr.bin of=hd60M.img bs=512 count=1 conv=notrunc,fdatasync
@@ -95,7 +95,25 @@ dd if=boot/loader.bin of=hd60M.img bs=512 seek=2 conv=notrunc,fdatasync
 dd if=kernel/kernel.bin of=hd60M.img bs=512 seek=10 conv=notrunc,fdatasync
 
 # ==========================================
-# 6. 启动 QEMU 模拟器
+# 6. 编译 Ring 3 应用，制作文件系统并烧录
+# ==========================================
+echo "Building mkfs tool..."
+gcc tools/mkfs.c -o tools/mkfs
+
+echo "Compiling Ring 3 User Application..."
+# 真正编译 hello.c，指定入口点为 _start，编译为纯净 64 位 ELF
+gcc -m64 -ffreestanding -nostdlib -fno-pic -fno-pie -no-pie \
+    -mno-red-zone -e _start \
+    -o hello.elf usr/hello.c
+
+echo "Creating 16MB MyFS Image..."
+./tools/mkfs fs.img hello.elf
+
+echo "Writing MyFS to Disk (Offset LBA 1000)..."
+dd if=fs.img of=hd60M.img bs=512 seek=1000 conv=notrunc,fdatasync
+
+# ==========================================
+# 7. 启动 QEMU 模拟器
 # ==========================================
 echo "Starting QEMU..."
 qemu-system-x86_64 \

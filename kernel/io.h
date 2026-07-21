@@ -16,4 +16,16 @@ static inline unsigned char inb(unsigned short port) {
     return ret;
 }
 
+// 往指定端口写入一个字 (16位)
+static inline void outw(unsigned short port, unsigned short val) {
+    asm volatile ( "outw %w0, %w1" : : "a"(val), "Nd"(port) );
+}
+
+// 从指定端口读出一个字 (16位)
+static inline unsigned short inw(unsigned short port) {
+    unsigned short ret;
+    asm volatile ( "inw %w1, %w0" : "=a"(ret) : "Nd"(port) );
+    return ret;
+}
+
 #endif

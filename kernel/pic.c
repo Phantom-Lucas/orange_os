@@ -28,7 +28,7 @@ void pic_init(void) {
     outb(PIC2_DATA, 0x01);
 
     //  发送 OCW1 (屏蔽字)：先把所有硬件都屏蔽掉 (写入 0xFF 即 11111111)
-    outb(PIC1_DATA, 0xFF); 
+    outb(PIC1_DATA, 0xFC); 
     outb(PIC2_DATA, 0xFF); 
 
     print_string("[INFO] 8259A PIC Initialized and Remapped.\n");
