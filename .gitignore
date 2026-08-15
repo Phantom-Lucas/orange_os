@@ -10,3 +10,4 @@
 # 过滤掉 Bochs 或 QEMU 产生的运行日志
 *out.txt
 *.log
+build/

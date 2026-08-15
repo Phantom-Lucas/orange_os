@@ -31,6 +31,5 @@ void pic_init(void) {
     outb(PIC1_DATA, 0xFC); 
     outb(PIC2_DATA, 0xFF); 
 
-    print_string("[INFO] 8259A PIC Initialized and Remapped.\n");
+    print_debug("[INFO] 8259A PIC Initialized and Remapped.\n");
 }
-

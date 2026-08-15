@@ -34,6 +34,13 @@ struct interrupt_frame
 };
 
 
+ // 检查异常是否来自用户态 (Ring 3)
+static int exception_from_user(const struct interrupt_frame* frame);
+
+// 终止出错的用户态进程，并打印错误信息
+static __attribute__((noreturn))
+void terminate_faulting_user(struct interrupt_frame* frame, int status, const char* description);
+
 // 设置中断门描述符
 void set_idt_gate(int interrupt_number, unsigned long handler_address);
 

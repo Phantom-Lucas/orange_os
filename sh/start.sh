@@ -80,7 +80,7 @@ if [ "$LOADER_SIZE" -gt 4096 ]; then
     exit 1
 fi
 
-MAX_KERNEL_SIZE=$((42 * 512))
+MAX_KERNEL_SIZE=$((112 * 512))
 if [ "$KERNEL_SIZE" -gt "$MAX_KERNEL_SIZE" ]; then
     echo "警告: kernel.bin 大小 ($KERNEL_SIZE 字节) 超过了 MBR 默认读取的最大限制!"
     exit 1

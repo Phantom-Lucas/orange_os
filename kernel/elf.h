@@ -39,9 +39,29 @@ typedef struct {
     Elf64_Xword p_align;       // 对齐要求
 } Elf64_Phdr;
 
+#define ELF_MAX_LOAD_VMAS 32
+#define ELF_MAX_ARGS 16
+struct elf_load_vma {
+    uint64_t start;
+    uint64_t end;
+    uint64_t flags;
+    uint64_t file_offset;
+};
 
-// 解析、加载并直接执行一个 ELF 文件
-void execute_elf(const char* filename);
+
+// 加载 ELF 到新的用户地址空间，供 spawn/exec 共用。
+int elf_load_image(const char* filename, uint64_t* out_entry, uint64_t* out_cr3,
+                   uint64_t* out_stack, struct elf_load_vma* vmas,
+                   uint32_t* vma_count);
+int elf_load_image_args(const char* filename, const char* const* argv,
+                        uint32_t argc, uint64_t* out_entry,
+                        uint64_t* out_cr3, uint64_t* out_stack,
+                        struct elf_load_vma* vmas, uint32_t* vma_count);
+
+// 创建一个新的用户进程并加入调度队列。
+int execute_elf(const char* filename);
+int execute_elf_args(const char* filename, const char* const* argv,
+                     uint32_t argc);
 
 #define PT_LOAD 1
 

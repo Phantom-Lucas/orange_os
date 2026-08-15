@@ -1,0 +1,14 @@
+commit=7f228c3dfbe229194e4f1a186032c90afb25f639
+branch=dev0714
+tag=none (维护者尚未确认纳入范围，未创建基线 tag)
+captured=2026-08-14 Asia/Shanghai
+worktree=dirty
+
+本记录采集时工作树已有大量 staged、unstaged 和 untracked 修改。阶段 0 没有执行 reset、checkout、无差别提交或删除；这些修改均保留给维护者审阅。
+
+采集时的工作树摘要：
+- staged/unstaged tracked changes: 45 个文件，约 6,521 行新增、1,534 行删除（以当时 `git diff --stat` 为准）
+- untracked source/docs/test files: 已存在，未纳入本次自动提交
+- build/：由基线命令生成，受 `.gitignore` 忽略
+
+后续若要把本记录升级为可检出的冻结基线，必须先人工确认文件纳入范围，再创建分支、提交和带注释 tag，并重新运行环境和测试采集。

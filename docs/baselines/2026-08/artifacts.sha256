@@ -1,0 +1,14 @@
+artifact                                      size
+build/mbr.bin                                 512 bytes
+build/loader.bin                              509 bytes
+build/kernel/kernel.bin                        90540 bytes
+build/kernel/kernel.elf                       451536 bytes
+build/hello.elf                                10832 bytes
+build/fs.img                                66596864 bytes
+
+a926143355553b4269cd6c63bb29e26461cb0b6fbd55d3bb8fb1c0dcc9da5c94  build/mbr.bin
+6fde9bfbacba470bc08ac060ff984b010f69a5e66d9199299fba59cc762bef43  build/loader.bin
+073fa17f838cf0661aaff82006df9419f3ef10e4770c0736f83a3593d5a1f084  build/kernel/kernel.bin
+d5c480197335f35d56cc50d726eddacd63e849332ba166c15da6cdbec0c7adcc  build/kernel/kernel.elf
+367e668f08522936fe1d57e4836793ae384f4268324d604f13b18f26a77ff186  build/hello.elf
+49c0de994337ff451156f406daebdb8103584b628f59dd048f07fce14dc8615a  build/fs.img

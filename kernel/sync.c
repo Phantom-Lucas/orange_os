@@ -14,16 +14,15 @@ void spinlock_acquire(spinlock_t* lock) {
     
     // 2. 关中断，防止在临界区被时钟抢占
     asm volatile("cli");
+    thread_preempt_disable();
 
-    // 3. 自旋等待别人释放锁
+    // 3. 自旋等待别人释放锁。
+    //
+    // 这里不能为了让时钟中断运行而重新打开 IF：如果中断处理程序
+    // 重入同一把锁，它会在当前 CPU 上永远等自己释放锁。所有持锁者
+    // 都在关中断状态下运行，因此持锁者不会被本地时钟中断抢走。
     while (__sync_lock_test_and_set(&lock->lock_flag, 1) == 1) {
-        // 如果系统已经处于开中断阶段，别人占着锁，我们需要短暂开一下中断
-        // 让时钟可以滴答，否则会死锁
-        if (rflags & (1 << 9)) { // 第 9 位是 IF (Interrupt Flag)
-            asm volatile("sti");
-            asm volatile("nop");
-            asm volatile("cli");
-        }
+        asm volatile("pause");
     }
     
     // 4. 抢到锁后，把最初的状态保存在锁里
@@ -36,6 +35,7 @@ void spinlock_release(spinlock_t* lock) {
     
     // 2. 原子操作：释放锁
     __sync_lock_release(&lock->lock_flag);
+    thread_preempt_enable();
     
     // 3. 完美还原状态：如果上锁前是开中断的（IF位为1），现在才开中断；
     // 如果上锁前是关中断的（比如正在 kernel_main 初始化），就继续保持关中断！
@@ -63,7 +63,6 @@ void mutex_acquire(mutex_t* m) {
         
         // 走到这里，说明锁被别人拿着。
         // 我们不自旋死等，我们要主动休眠！
-        current_thread->status = TASK_BLOCKED;
         current_thread->waiting_lock = m;
         
         // 【关键】：休眠前，必须把自旋锁还回去，否则别人连释放锁的机会都没了！
@@ -72,12 +71,9 @@ void mutex_acquire(mutex_t* m) {
         // 接下来，线程进入休眠循环。
         // 因为状态已经变成了 BLOCKED，时钟中断触发的 schedule() 会彻底无视本线程。
         // 我们只需用 hlt 挂起 CPU 节省算力，直到有人把我们的状态改回 READY。
-        while (current_thread->status == TASK_BLOCKED) {
-            asm volatile("sti; hlt"); 
-        }
-        
-        // 如果代码执行到了这里，说明有人调用 mutex_release 唤醒了我们！
-        // 循环会回到最外层的 while(1)，我们再次尝试去抢锁。
+        thread_block();
+
+        // 被唤醒后重新检查锁状态。
     }
 }
 void mutex_release(mutex_t* m) {
@@ -87,11 +83,10 @@ void mutex_release(mutex_t* m) {
     int woke_someone = 0; // 【新增】记录是否唤醒了别人
     
     if (current_thread != 0) {
-        struct task_struct* temp = current_thread->next;
+        struct thread* temp = current_thread->next;
         while (temp != current_thread) {
             if (temp->status == TASK_BLOCKED && temp->waiting_lock == m) {
-                temp->status = TASK_READY;
-                temp->waiting_lock = 0;
+                thread_unblock(temp);
                 woke_someone = 1; // 【标记】我叫醒了一个兄弟！
                 break; 
             }
@@ -104,14 +99,5 @@ void mutex_release(mutex_t* m) {
     // 【核心机制：唤醒抢占】
     // 如果我刚才唤醒了别人，那我就好人做到底，主动放弃剩下的时间片！
     // ==========================================
-    if (woke_someone) {
-        // 关中断，保护 schedule 函数不被时钟打断
-        asm volatile("cli");
-        
-        // 强行呼叫上帝之手，把 CPU 立刻切给刚才被唤醒的人！
-        schedule();          
-        
-        // 当未来某一天 CPU 再次切回我这里时，再恢复开中断
-        asm volatile("sti"); 
-    }
+    if (woke_someone) thread_request_reschedule();
 }

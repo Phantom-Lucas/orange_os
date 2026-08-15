@@ -98,6 +98,22 @@ loader_start:
 .e820_success_continue:
 
     ; =========================================================
+    ; MBR 只能安全读取到 0x6D00，避免覆盖自身位于 0x7C00 的代码。
+    ; 现在 Loader 已在 0x900 运行，因此由它继续把内核剩余的 146 个扇区
+    ; （LBA 52..197）加载到 0x6D00 之后，覆盖当前内核文件尾部。
+    ; 调用栈放在 0x1800，避开即将写入的内核区域。
+    ; =========================================================
+    mov sp, 0x1800
+    mov eax, 52
+    ; 使用 EBX 作为 32 位物理写入游标，避免超过 64KiB 后 BX 回绕，
+    ; 覆盖 IVT、E820 表和 BIOS 数据。
+    mov ebx, 0x6d00
+    ; MBR 已加载 LBA 10..51，共 42 个扇区；这里补足到 Makefile 允许的
+    ; 188 个扇区，避免内核增长后 .rodata/.data 尾部仍停留在磁盘上。
+    mov cx, 146
+    call rd_disk_m_16
+
+    ; =========================================================
     ; 内存探测结束，时空胶囊已埋在 0x8000，继续原本的保护模式流程
     ; =========================================================
 
@@ -117,6 +133,61 @@ loader_start:
 
     ; ④ 远跳转进入 32 位保护模式
     jmp dword SELECTOR_CODE:p_mode_start
+
+; ------------------------------------------------------------
+; Loader 阶段只读取固定低端的内核镜像，因此保留短小的 28 位兼容
+; PIO 读盘函数；内核接管后的文件系统 I/O 统一由 LBA48 驱动负责。
+; 调用约定与 MBR 中的版本一致：
+; EAX=LBA, BX=目标物理地址, CX=扇区数。
+; ------------------------------------------------------------
+rd_disk_m_16:
+    mov esi, eax
+    mov di, cx
+
+    mov dx, 0x1f2
+    mov al, cl
+    out dx, al
+
+    mov eax, esi
+    mov dx, 0x1f3
+    out dx, al
+    mov cl, 8
+    shr eax, cl
+    mov dx, 0x1f4
+    out dx, al
+    shr eax, cl
+    mov dx, 0x1f5
+    out dx, al
+    shr eax, cl
+    and al, 0x0f
+    or al, 0xe0
+    mov dx, 0x1f6
+    out dx, al
+
+    mov dx, 0x1f7
+    mov al, 0x20
+    out dx, al
+
+.read_sector_loop:
+    mov dx, 0x1f7
+.not_ready:
+    nop
+    in al, dx
+    and al, 0x88
+    cmp al, 0x08
+    jne .not_ready
+
+    mov cx, 256
+    mov dx, 0x1f0
+.read_word_loop:
+    in ax, dx
+    mov [ebx], ax
+    add ebx, 2
+    loop .read_word_loop
+
+    dec di
+    jnz .read_sector_loop
+    ret
 
 ; 4. 32 位保护模式入口（在此处构建页表，准备起飞）
 ; ------------------------------------------------------------

@@ -24,7 +24,9 @@ start:
     ; ！！！极其重要：必须用 eax，确保高 16 位完全清零，防止加载到垃圾 LBA 地址！！！
     mov eax, 2          
     mov bx, 0x900       ; 物理地址 0x900
-    mov cx, 50          ; 连续读 50 个扇区，把后面的 C 内核也一起读进来！
+    ; 先读取 Loader 和内核首段。该范围必须在 0x7C00（正在运行的 MBR）之前结束；
+    ; 内核的剩余部分由 Loader 在自身已取得控制权后继续读取。
+    mov cx, 50
     call rd_disk_m_16
 
     ; 3. 【调试哨兵】如果读盘成功返回了，我们在这里打一个黄色的 'S' (Success)
@@ -48,7 +50,8 @@ rd_disk_m_16:
 
     mov eax, esi        ; 还原 LBA
 
-    ; 第二步：写入 LBA 地址 (LBA28 方式)
+    ; 第二步：引导区只访问固定的低端 LBA，使用兼容的 28 位命令；
+    ; 内核接管后，文件系统路径统一使用 ATA LBA48 EXT 命令。
     mov dx, 0x1f3
     out dx, al
     mov cl, 8

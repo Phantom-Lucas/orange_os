@@ -3,6 +3,10 @@
 #ifndef PRINT_H
 #define PRINT_H
 
+#ifndef BOOT_DIAGNOSTIC
+#define BOOT_DIAGNOSTIC 0
+#endif
+
 #define VGA_BLACK         0
 #define VGA_BLUE          1
 #define VGA_GREEN         2
@@ -22,27 +26,31 @@
 
 void print_init(void);
 
-void clear_screen(void); // 清屏
+void clear_screen(void);
 
-void put_char(char c); // 输出一个字符
+void put_char(char c);
 
-void print_string(const char *str); // 输出字符串
+void print_string(const char *str);
 
-void print_hex(unsigned long val); // 输出十六进制数
+void print_buffer(const char* buffer, unsigned long length);
 
-void print_int(long val); // 输出整数
+void print_hex(unsigned long val);
 
-void set_print_color(unsigned char fg, unsigned char bg); // 设置打印颜色
+void print_int(long val);
 
-void reset_print_color(void); // 重置打印颜色为默认值
+void set_print_color(unsigned char fg, unsigned char bg);
 
-void print_error(const char* str);    // 亮红色
+void reset_print_color(void);
 
-void print_success(const char* str);  // 亮绿色
+void print_error(const char* str);
 
-void print_info(const char* str);     // 亮青色
+void print_success(const char* str);
 
-void print_warning(const char* str);  // 黄色
+void print_info(const char* str);
+
+void print_warning(const char* str);
+/* 仅在 BOOT_DIAGNOSTIC=1 时输出；正常启动保持安静。 */
+void print_debug(const char* str);
 
 void panic_print(const char* str);
 

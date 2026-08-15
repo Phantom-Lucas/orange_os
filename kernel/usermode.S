@@ -1,6 +1,29 @@
 /* kernel/usermode.S (全选覆盖) */
 .global enter_user_mode
 
+.global normalize_kernel_gs
+normalize_kernel_gs:
+    movabs $current_cpu, %rax
+    mov %rax, %rdx
+    shr $32, %rdx
+    mov $0xC0000101, %ecx
+    wrmsr
+    xor %eax, %eax
+    xor %edx, %edx
+    mov $0xC0000102, %ecx
+    wrmsr
+    ret
+
+.global set_user_fs_base
+set_user_fs_base:
+    /* %rdi = FS.base; user TLS uses the architectural FS base MSR. */
+    mov %rdi, %rax
+    mov %rdi, %rdx
+    shr $32, %rdx
+    mov $0xC0000100, %ecx
+    wrmsr
+    ret
+
 /* 
  * void enter_user_mode(uint64_t rip, uint64_t rsp, uint64_t cr3);
  * %rdi = rip, %rsi = rsp, %rdx = cr3
@@ -43,4 +66,34 @@ enter_user_mode:
 
 .global return_to_user
 return_to_user:
+    /* schedule/thread_block 已将当前上下文规范化为内核 GS。 */
+    swapgs
+    iretq
+
+/*
+ * 新用户线程的内核栈布局为：SS, RSP, RFLAGS, CS, RIP, arg。
+ * switch_to 返回后 RSP 指向 SS，参数位于 iret frame 后的第六个 qword。
+ */
+.global return_to_user_with_arg
+return_to_user_with_arg:
+    /*
+     * 新线程可能从 syscall 或用户态中断路径切入，入口时 GS 的交换
+     * 历史并不可靠。显式恢复一对固定的 per-CPU GS 基址，确保后续
+     * syscall_entry 的 swapgs 总能得到 current_cpu，而不是地址 0x8。
+     */
+    swapgs
+    mov 40(%rsp), %rdi
+    iretq
+
+/* 在 syscall 的内核上下文中替换当前进程映像，不返回调用者。 */
+.global resume_user_image
+resume_user_image:
+    /* %rdi = entry, %rsi = user rsp, %rdx = new cr3 */
+    mov %rdx, %cr3
+    pushq $0x1B
+    pushq %rsi
+    pushq $0x202
+    pushq $0x23
+    pushq %rdi
+    swapgs
     iretq

@@ -1,46 +1,42 @@
 // kernel/elf.c
 #include "elf.h"
 #include "fs.h"
-#include "disk.h"
 #include "kalloc.h"
 #include "memory.h"
 #include "print.h"
 #include "string.h"
-#include "gdt.h"
-
-// ==========================================
-// 全局数据与外部依赖声明
-// ==========================================
-
-// 必须与 syscall.c 中的定义保持 100% 内存布局一致
-struct cpu_local_data {
-    uint64_t kernel_rsp;
-    uint64_t user_rsp;
-};
-
-// 引用在 syscall.c 中初始化的当前 CPU 数据结构
-extern struct cpu_local_data current_cpu;
-
-// 引用在 gdt.c 中定义的 TSS 栈刷新函数
-extern void set_tss_rsp0(uint64_t rsp0);
-
-// 给即将运行的 Ring 3 进程准备的 4KB 专属内核栈
-static uint8_t ring3_kernel_stack[4096]; 
+#include "thread.h"
 
 // ==========================================
 // ELF 文件加载与内存映射核心逻辑
 // ==========================================
-static int load_elf_process(const char* filename, uint64_t* out_entry, uint64_t* out_cr3, uint64_t* out_stack) {
-    struct inode target_file;
-    if (!fs_find_file(filename, &target_file)) {
+int elf_load_image_args(const char* filename, const char* const* argv,
+                        uint32_t argc, uint64_t* out_entry,
+                        uint64_t* out_cr3, uint64_t* out_stack,
+                        struct elf_load_vma* vmas, uint32_t* vma_count) {
+    struct fs_request stat_request = {0};
+    stat_request.operation = FS_REQUEST_STAT;
+    strcpy(stat_request.name, filename);
+    if (fs_service_call(&stat_request) != 0 ||
+        stat_request.stat_size == 0 ||
+        stat_request.stat_size > UINT32_MAX ||
+        stat_request.stat_size > FS_MAX_FILE_SIZE) {
         return 0;
     }
+    uint32_t file_size = (uint32_t)stat_request.stat_size;
     
-    // 1. 将文件读入内核堆缓存中
-    uint8_t* file_buf = (uint8_t*)kmalloc(target_file.size + 512); 
-    uint32_t total_sectors = (target_file.size + 511) / 512;
-    uint32_t first_lba = FS_START_LBA + target_file.direct_blocks[0] * 8;
-    disk_read_sector(first_lba, file_buf, total_sectors);
+    // 1. 通过 FS 服务将文件读入内核堆缓存。
+    uint8_t* file_buf = (uint8_t*)kmalloc((uint32_t)file_size + 512);
+    if (!file_buf) return 0;
+    struct fs_request read_request = {0};
+    read_request.operation = FS_REQUEST_READ;
+    read_request.length = (uint32_t)file_size;
+    read_request.buffer = file_buf;
+    strcpy(read_request.name, filename);
+    if (fs_service_call(&read_request) != file_size) {
+        kfree(file_buf);
+        return 0;
+    }
 
     // 2. 校验 ELF 魔数
     Elf64_Ehdr* ehdr = (Elf64_Ehdr*)file_buf;
@@ -51,9 +47,16 @@ static int load_elf_process(const char* filename, uint64_t* out_entry, uint64_t*
     }
 
     *out_entry = ehdr->e_entry;
+    *out_cr3 = 0;
+    *out_stack = 0;
+    if (vma_count != 0) *vma_count = 0;
     
     // 3. 创建全新的 Ring 3 页表目录
-    uint64_t user_cr3 = (uint64_t)create_page_dir();
+    paddr_t user_cr3 = create_page_dir();
+    if (user_cr3 == 0) {
+        kfree(file_buf);
+        return 0;
+    }
     *out_cr3 = user_cr3;
 
     // 4. 遍历程序头，映射内存段
@@ -69,11 +72,32 @@ static int load_elf_process(const char* filename, uint64_t* out_entry, uint64_t*
             uint64_t end_page = (vaddr + memsz + 0xFFF) & ~0xFFFULL;
             uint64_t pages = (end_page - start_page) / 4096;
 
+            if (vmas != 0 && vma_count != 0 &&
+                *vma_count < ELF_MAX_LOAD_VMAS) {
+                vmas[*vma_count].start = start_page;
+                vmas[*vma_count].end = end_page;
+                vmas[*vma_count].flags = phdr[i].p_flags;
+                vmas[*vma_count].file_offset = offset;
+                (*vma_count)++;
+            }
+
             // 为该段分配物理页并建立映射
             for (uint64_t p = 0; p < pages; p++) {
-                void* phys = alloc_page();
-                memset((void*)P2V(phys), 0, 4096);
-                map_page(user_cr3, start_page + p * 4096, (uint64_t)phys, 0x07);
+                paddr_t phys = alloc_page_owned(PAGE_OWNER_USER);
+                if (phys == 0) {
+                    goto load_fail;
+                }
+                memset(P2V(phys), 0, PAGE_SIZE);
+                /* 只把 ELF 的 PF_W 段映射为可写；代码和 .rodata 必须
+                   允许读取但不能被用户伪造为 futex writable 地址。 */
+                uint64_t page_flags = PTE_US;
+                if ((phdr[i].p_flags & 0x2U) != 0) page_flags |= PTE_RW;
+                if(map_page(user_cr3, start_page + p * PAGE_SIZE,
+                            phys, page_flags)!=0){
+                    free_page_owned(phys, PAGE_OWNER_USER);
+                    goto load_fail;
+                }
+
             }
 
             // 【严谨修复】：借用 CR3 拷贝数据时，必须强行屏蔽中断！
@@ -109,78 +133,136 @@ static int load_elf_process(const char* filename, uint64_t* out_entry, uint64_t*
 
     // 5. 分配并映射用户栈空间
     uint64_t user_stack_top = 0x00007FFFFFFFF000; 
-    void* stack_phys = alloc_page();
-    memset((void*)P2V(stack_phys), 0, 4096);
-    map_page(user_cr3, user_stack_top - 4096, (uint64_t)stack_phys, 0x07);
-    *out_stack = user_stack_top;
+    paddr_t stack_phys = alloc_page_owned(PAGE_OWNER_USER);
+    if (stack_phys == 0) {
+        goto load_fail;
+    }
+    memset(P2V(stack_phys), 0, PAGE_SIZE);
+    if(map_page(user_cr3, user_stack_top - PAGE_SIZE, stack_phys, 0x07)!=0){
+        free_page_owned(stack_phys, PAGE_OWNER_USER);
+        goto load_fail;
+    }
+    if (argv != 0 && argc > ELF_MAX_ARGS) goto load_fail;
+    {
+        uint64_t user_argv[ELF_MAX_ARGS];
+        uint64_t cursor = user_stack_top;
+        uint64_t bottom = user_stack_top - PAGE_SIZE;
+        uint64_t old_cr3;
+        uint64_t rflags;
+        uint32_t i;
+
+        __asm__ volatile("pushfq; popq %0; cli" : "=r"(rflags) :: "memory");
+        __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+        __asm__ volatile("mov %0, %%cr3" :: "r"(user_cr3) : "memory");
+        for (i = argc; i != 0; i--) {
+            size_t length = strlen(argv[i - 1]) + 1;
+            if (length > cursor - bottom) {
+                __asm__ volatile("mov %0, %%cr3" :: "r"(old_cr3) : "memory");
+                __asm__ volatile("pushq %0; popfq" :: "r"(rflags) : "memory", "cc");
+                goto load_fail;
+            }
+            cursor -= length;
+            memcpy((void*)cursor, argv[i - 1], length);
+            user_argv[i - 1] = cursor;
+        }
+        cursor &= ~7ULL;
+        if (cursor < bottom + (uint64_t)(argc + 2) * sizeof(uint64_t)) {
+            __asm__ volatile("mov %0, %%cr3" :: "r"(old_cr3) : "memory");
+            __asm__ volatile("pushq %0; popfq" :: "r"(rflags) : "memory", "cc");
+            goto load_fail;
+        }
+        cursor -= sizeof(uint64_t);
+        *(uint64_t*)cursor = 0;
+        for (i = argc; i != 0; i--) {
+            cursor -= sizeof(uint64_t);
+            *(uint64_t*)cursor = user_argv[i - 1];
+        }
+        cursor -= sizeof(uint64_t);
+        *(uint64_t*)cursor = argc;
+        __asm__ volatile("mov %0, %%cr3" :: "r"(old_cr3) : "memory");
+        __asm__ volatile("pushq %0; popfq" :: "r"(rflags) : "memory", "cc");
+        *out_stack = cursor;
+    }
 
     kfree(file_buf);
     return 1;
+
+load_fail:
+    /* destroy_user_address_space 会回收已成功映射的用户页和页表页。 */
+    destroy_user_address_space(user_cr3);
+    kfree(file_buf);
+    *out_cr3 = 0;
+    *out_stack = 0;
+    return 0;
+}
+
+int elf_load_image(const char* filename, uint64_t* out_entry, uint64_t* out_cr3,
+                   uint64_t* out_stack, struct elf_load_vma* vmas,
+                   uint32_t* vma_count)
+{
+    return elf_load_image_args(filename, 0, 0, out_entry, out_cr3, out_stack,
+                               vmas, vma_count);
 }
 
 // ==========================================
 // 跃迁指令控制中心
 // ==========================================
-void execute_elf(const char* filename) {
-    print_info("[ELF] Attempting to execute: ");
-    print_string(filename);
-    print_string("\n");
+int execute_elf_args(const char* filename, const char* const* argv,
+                     uint32_t argc) {
+    print_debug("[ELF] Attempting to execute: ");
+    print_debug(filename);
+    print_debug("\n");
 
     uint64_t ring3_rip, ring3_cr3, ring3_rsp;
     
-    if (load_elf_process(filename, &ring3_rip, &ring3_cr3, &ring3_rsp)) {
-        
-        // 修正非规范地址错误
-        if (ring3_rip > 0x00007FFFFFFFFFFF) {
-            ring3_rip = 0x400000; 
-        } 
-        
-        print_success("[SYSTEM] Executing Unbreakable Ring 3 Jump...\n");
-        
-        // 计算当前进程的专属内核栈顶安全地址
-        uint64_t safe_kernel_stack_top = (uint64_t)ring3_kernel_stack + 4096;
-        
-        // ========================================================
-        // 核心装甲配置：为 Ring 3 构建双重降落伞
-        // ========================================================
-        
-        // 降落伞 1：TSS 栈（应对时钟、异常等硬件中断强制回站）
-        set_tss_rsp0(safe_kernel_stack_top);
-        
-        // 降落伞 2：Per-CPU GS 栈（应对 SwapGS 与 Syscall 软件系统调用）
-        current_cpu.kernel_rsp = safe_kernel_stack_top;
-        
-        // ========================================================
-        
-        // 锁死中断门，准备强行切换时空
-        __asm__ volatile ("cli");
-        
-        // iretq 信仰之跃：切页表 -> 载入伪造的栈帧 -> 跃迁
-        __asm__ volatile (
-            "mov %0, %%cr3 \n"
-            
-            "mov $0x1B, %%ax \n"
-            "mov %%ax, %%ds \n"
-            "mov %%ax, %%es \n"
-            "mov %%ax, %%fs \n"
-            "mov %%ax, %%gs \n"
-            
-            "pushq $0x1B \n"     // 5. SS (User Data 0x1B)
-            "pushq %1 \n"        // 4. RSP
-            "pushq $0x202 \n"    // 3. RFLAGS (IF=1 开启中断，准备接受调度)
-            "pushq $0x23 \n"     // 2. CS (User Code 0x23)
-            "pushq %2 \n"        // 1. RIP
-            
-            "iretq \n"
-            : 
-            : "r"(ring3_cr3), "r"(ring3_rsp), "r"(ring3_rip)
-            : "memory", "rax"
-        );
-        
-        // 永远不会执行到这里，除非跃迁失败
-        while(1); 
-        
-    } else {
+    struct elf_load_vma vmas[ELF_MAX_LOAD_VMAS];
+    uint32_t vma_count = 0;
+    if (!elf_load_image_args(filename, argv, argc, &ring3_rip, &ring3_cr3,
+                             &ring3_rsp, vmas, &vma_count)) {
         print_error("[ELF] Failed to load.\n");
+        return -1;
     }
+
+    if (ring3_rip > 0x00007FFFFFFFFFFF) {
+        destroy_user_address_space(ring3_cr3);
+        return -1;
+    }
+    struct process* process = process_create_loaded(ring3_rip, ring3_cr3,
+                                                    ring3_rsp, 5,
+                                                    vmas, vma_count);
+    if (!process) {
+        print_error("[ELF] Failed to create process.\n");
+        return -1;
+    }
+    {
+        const char* base = filename;
+        uint32_t length = 0;
+        while (*base != '\0') {
+            if (*base == '/') filename = base + 1;
+            base++;
+        }
+        while (filename[length] != '\0' && length + 1 < sizeof(process->name)) {
+            process->name[length] = filename[length];
+            length++;
+        }
+        process->name[length] = '\0';
+        /* Shell 是当前唯一的终端会话控制者。普通用户程序即使执行
+           自己的 fork/wait，也不能把全局终端前台 PID 清零。 */
+        process->terminal_controller = 0;
+        if (filename[0] == 's' && filename[1] == 'h' &&
+            filename[2] == 'e' && filename[3] == 'l' &&
+            filename[4] == 'l' && filename[5] == '.' &&
+            filename[6] == 'e' && filename[7] == 'l' &&
+            filename[8] == 'f' && filename[9] == '\0') {
+            process->terminal_controller = 1;
+        }
+    }
+    thread_append(process->main_thread);
+    print_debug("[SYSTEM] User process queued.\n");
+    return (int)process->pid;
+}
+
+int execute_elf(const char* filename)
+{
+    return execute_elf_args(filename, 0, 0);
 }

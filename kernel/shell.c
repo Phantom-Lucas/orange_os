@@ -104,7 +104,7 @@ void execute_command(char* cmd) {
     else if (strcmp(cmd, "testpage") == 0) 
     {
         print_string("Testing Physical Page Allocation (alloc_page)...\n");
-        void* paddr = alloc_page();
+            paddr_t paddr = alloc_page_owned(PAGE_OWNER_TEST);
         if (paddr) {
             print_string("  -> Allocated Physical Addr: "); print_hex((uint64_t)paddr); print_string("\n");
             void* vaddr = P2V(paddr);
@@ -115,7 +115,7 @@ void execute_command(char* cmd) {
             if (*(uint64_t*)vaddr == 0xDEADBEEFCAFEBABE) {
                 print_success("  -> Read/Write Test: PASSED\n");
             }
-            free_page(paddr);
+            free_page_owned(paddr, PAGE_OWNER_TEST);
             print_success("  -> Page freed successfully.\n");
         } else {
             print_error("  -> Allocation FAILED!\n");
@@ -151,7 +151,7 @@ void execute_command(char* cmd) {
     else if(strcmp(cmd, "testthread") == 0)
     {
         print_string("Spawning a new kernel thread...\n");
-        struct task_struct* new_thread = thread_create(dummy_thread_task, 5);
+        struct thread* new_thread = thread_create(dummy_thread_task, 5);
         if (new_thread) {
             thread_append(new_thread);
             print_success("Thread created and appended to Ready Queue!\n");
@@ -204,21 +204,34 @@ void execute_command(char* cmd) {
         print_string("Spawning a Ring 3 isolated User Process...\n");
 
         // 1. 创建进程 PCB，它会拿到一个独立的、低半区纯净的 CR3 页表
-        struct task_struct* new_process = process_create((void (*)(void))0x400000, 5);
+        struct process* new_process = process_create((void (*)(void))0x400000, 5);
         
         if (new_process) {
             // 2. 为这个进程申请一页真实的物理内存存放代码
-            void* code_paddr = alloc_page();
+            paddr_t code_paddr = alloc_page_owned(PAGE_OWNER_USER);
+            if (code_paddr == 0) {
+                process_discard(new_process);
+                cmd_index = 0;
+                return;
+            }
             
             // 3. 将机器码拷贝到这块物理页中 (必须用 P2V 操作)
             memcpy(P2V(code_paddr), app_machine_code, sizeof(app_machine_code));
             
             // 4. 【见证奇迹的时刻】：将这块物理页，挂载到新进程的虚拟地址 0x400000 处！
             // 权限设置为 PTE_P | PTE_RW | PTE_US (值为 0x07，代表用户态可读写)
-            map_page(new_process->cr3_paddr, 0x400000, (uint64_t)code_paddr, 0x07);
+            if (map_page(new_process->cr3_paddr, 0x400000, code_paddr,
+                         PTE_RW | PTE_US) != 0)
+            {
+                print_error("  -> Code page mapping FAILED!\n");
+                free_page_owned(code_paddr, PAGE_OWNER_USER);
+                process_discard(new_process);
+                cmd_index = 0;
+                return;   // 注意：这里在 execute_command 里，用 return 即可
+            }
             
             // 5. 加入就绪队列
-            thread_append(new_process);
+            thread_append(new_process->main_thread);
             print_success("User Process created! Address 0x400000 mapped and ready.\n");
             print_warning("Run 'yield' to jump into it (System will hang in the user app as intended).\n");
         } else {
@@ -230,12 +243,22 @@ void execute_command(char* cmd) {
         print_info("[VM Proof] Creating two independent Universes (CR3)...\n");
 
         // 1. 创造两个完全独立的进程页表
-        uint64_t cr3_A = (uint64_t)create_page_dir();
-        uint64_t cr3_B = (uint64_t)create_page_dir();
+        paddr_t cr3_A = create_page_dir();
+        paddr_t cr3_B = create_page_dir();
 
         // 2. 申请两个不同的真实物理页
-        void* phys_A = alloc_page();
-        void* phys_B = alloc_page();
+        paddr_t phys_A = alloc_page_owned(PAGE_OWNER_USER);
+        paddr_t phys_B = alloc_page_owned(PAGE_OWNER_USER);
+
+        if (cr3_A == 0 || cr3_B == 0 || phys_A == 0 || phys_B == 0) {
+            if (phys_A != 0) free_page(phys_A);
+            if (phys_B != 0) free_page(phys_B);
+            if (cr3_A != 0) destroy_user_address_space(cr3_A);
+            if (cr3_B != 0) destroy_user_address_space(cr3_B);
+            print_error("  -> VM test setup allocation FAILED!\n");
+            cmd_index = 0;
+            return;
+        }
 
         // 3. 在物理页里写下不同的印记 (利用内核的 P2V 后门)
         strcpy((char*)P2V(phys_A), "I am Data from Universe A!");
@@ -243,8 +266,23 @@ void execute_command(char* cmd) {
 
         // 4. 【核心】：将它们挂载到 两个页表 的 ！！！同一个虚拟地址！！！
         uint64_t target_vaddr = 0x40000000; // 选定虚拟地址 1GB 处
-        map_page(cr3_A, target_vaddr, (uint64_t)phys_A, 0x07);
-        map_page(cr3_B, target_vaddr, (uint64_t)phys_B, 0x07);
+        if (map_page(cr3_A, target_vaddr, phys_A, PTE_RW | PTE_US) != 0) {
+            print_error("  -> Mapping Universe A FAILED!\n");
+            free_page(phys_A);      // ← 补上
+            free_page(phys_B);      // ← 补上（B 也白分配了）
+            destroy_user_address_space(cr3_A);
+            destroy_user_address_space(cr3_B);
+            cmd_index = 0;          // ← 补上（见下方说明）
+            return;
+        }
+        if (map_page(cr3_B, target_vaddr, phys_B, PTE_RW | PTE_US) != 0) {
+            print_error("  -> Mapping Universe B FAILED!\n");
+            free_page(phys_B);      // B 尚未挂入 B 的地址空间
+            destroy_user_address_space(cr3_A);
+            destroy_user_address_space(cr3_B);
+            cmd_index = 0;          // ← 补上
+            return;
+        }
 
         // 5. 保存内核当前的 CR3
         uint64_t old_cr3;
@@ -266,6 +304,10 @@ void execute_command(char* cmd) {
 
         // 8. 恢复内核环境
         __asm__ volatile("mov %0, %%cr3" :: "r"(old_cr3) : "memory");
+
+        /* A/B 的用户页和四级页表由地址空间销毁流程统一回收。 */
+        destroy_user_address_space(cr3_A);
+        destroy_user_address_space(cr3_B);
         
         print_info("[VM Proof] Same Virtual Address, Different Data. Isolation is REAL!\n");
     }
@@ -274,10 +316,15 @@ void execute_command(char* cmd) {
         print_info("[Ring 3 Proof] Spawning a user process to attempt illegal operations...\n");
 
         // 1. 创建进程，指定它去执行 0x800000 的代码
-        struct task_struct* rogue_process = process_create((void (*)(void))0x800000, 5);
+        struct process* rogue_process = process_create((void (*)(void))0x800000, 5);
         
         if (rogue_process) {
-            void* code_paddr = alloc_page();
+            paddr_t code_paddr = alloc_page_owned(PAGE_OWNER_USER);
+            if (code_paddr == 0) {
+                process_discard(rogue_process);
+                cmd_index = 0;
+                return;
+            }
             
             // 2. 植入恶意机器码
             // 0xFA 是 cli 指令 (关闭中断)，这是典型的 Ring 0 特权指令！
@@ -286,9 +333,16 @@ void execute_command(char* cmd) {
             memcpy(P2V(code_paddr), malicious_code, sizeof(malicious_code));
             
             // 3. 挂载物理页
-            map_page(rogue_process->cr3_paddr, 0x800000, (uint64_t)code_paddr, 0x07);
+            if (map_page(rogue_process->cr3_paddr, 0x800000, code_paddr,
+                         PTE_RW | PTE_US) != 0) {
+                print_error("  -> Malicious code mapping FAILED!\n");
+                free_page_owned(code_paddr, PAGE_OWNER_USER);
+                process_discard(rogue_process);
+                cmd_index = 0;
+                return;
+            }
             
-            thread_append(rogue_process);
+            thread_append(rogue_process->main_thread);
             print_success("Rogue User Process mapped at 0x800000.\n");
             print_warning("Run 'yield'. If Ring 3 works, you MUST get a General Protection Fault (Exception 13)!\n");
         }

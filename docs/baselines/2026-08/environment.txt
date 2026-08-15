@@ -1,0 +1,159 @@
+root=/home/orange/my_os
+output=/home/orange/my_os/docs/baselines/2026-08/environment.txt
+
+[uname]
+$ uname -a
+Linux orange-VirtualBox 6.8.0-136-generic #136~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul  3 16:29:11 UTC  x86_64 x86_64 x86_64 GNU/Linux
+
+[gcc]
+$ gcc --version
+gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+Copyright (C) 2021 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+[ld]
+$ ld --version
+GNU ld (GNU Binutils for Ubuntu) 2.38
+Copyright (C) 2022 Free Software Foundation, Inc.
+这个程序是自由软件；您可以遵循GNU 通用公共授权版本 3 或
+(您自行选择的) 稍后版本以再次散布它。
+这个程序完全没有任何担保。
+
+[nasm]
+$ nasm --version
+NASM version 2.15.05
+
+[qemu]
+$ qemu-system-x86_64 --version
+QEMU emulator version 6.2.0 (Debian 1:6.2+dfsg-2ubuntu6.31)
+Copyright (c) 2003-2021 Fabrice Bellard and the QEMU Project developers
+
+[gdb]
+$ gdb --version
+GNU gdb (Ubuntu 12.1-0ubuntu1~22.04.2) 12.1
+Copyright (C) 2022 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+[make]
+$ make --version
+GNU Make 4.3
+为 x86_64-pc-linux-gnu 编译
+Copyright (C) 1988-2020 Free Software Foundation, Inc.
+许可证：GPLv3+：GNU 通用公共许可证第 3 版或更新版本<http://gnu.org/licenses/gpl.html>。
+本软件是自由软件：您可以自由修改和重新发布它。
+在法律允许的范围内没有其他保证。
+
+[sha256:Makefile]
+c62f37d0a90caa17d85886e673a07872bb79e958b9dd439bb0aa5ce6d1f4ae25  /home/orange/my_os/Makefile
+
+[sha256:boot/loader.S]
+057b7bed28e0498533ad4880206b21d49e5bc301d8bce2792803a3a5bbe49afa  /home/orange/my_os/boot/loader.S
+
+[sha256:kernel/linker.ld]
+e7340c816e4004495868c608245bd9a3b41ca8dd90f426237954b57adfaa3a0c  /home/orange/my_os/kernel/linker.ld
+
+[git]
+commit=7f228c3dfbe229194e4f1a186032c90afb25f639
+branch=dev0714
+status=
+M  .gitignore
+AM Makefile
+MM boot/loader.S
+MM boot/mbr.S
+AM docs/oranges-roadmap.md
+AM docs/project-overview.md
+MM kernel/disk.c
+MM kernel/disk.h
+MM kernel/elf.c
+MM kernel/elf.h
+MM kernel/fs.c
+MM kernel/fs.h
+ M kernel/gdt.h
+MM kernel/idt.c
+ M kernel/idt.h
+AM kernel/ipc.c
+AM kernel/ipc.h
+ M kernel/kalloc.c
+ M kernel/kalloc.h
+MM kernel/kernel.c
+AM kernel/keyboard.c
+AM kernel/keyboard.h
+MM kernel/memory.c
+MM kernel/memory.h
+ M kernel/pic.c
+ M kernel/pic.h
+MM kernel/print.c
+MM kernel/print.h
+ M kernel/shell.c
+ M kernel/sync.c
+ M kernel/sync.h
+MM kernel/syscall.c
+MM kernel/syscall.h
+MM kernel/syscall_entry.S
+ M kernel/test.c
+MM kernel/thread.c
+MM kernel/thread.h
+ M kernel/timer.c
+ M kernel/timer.h
+AM kernel/tty.c
+AM kernel/tty.h
+MM kernel/usermode.S
+M  sh/start.sh
+A  tests/check_build.sh
+AM tests/qemu_smoke.sh
+MM tools/mkfs.c
+A  usr/exec_demo.c
+A  usr/fault.c
+M  usr/hello.c
+A  usr/ipc_demo.c
+AM usr/shell.c
+AM usr/syscall.h
+?? docs/baselines/
+?? docs/known-issues.md
+?? docs/oranges-design-implementation.md
+?? docs/project-code-reading-guide.md
+?? docs/roadmap-execution-plan.md
+?? kernel/file.c
+?? kernel/file.h
+?? kernel/futex.c
+?? kernel/futex.h
+?? kernel/process.c
+?? kernel/process.h
+?? kernel/thread_internal.h
+?? tests/check_all.sh
+?? tests/collect_env.sh
+?? tests/mkfs_index.sh
+?? tests/mkfs_lba48.sh
+?? tests/qemu_boot.sh
+?? tests/qemu_fs.sh
+?? tests/qemu_input_stress.sh
+?? tests/qemu_lba48.sh
+?? tests/qemu_shell_fs.sh
+?? tests/qemu_sync.sh
+?? tests/qemu_userland.sh
+?? tests/qemu_vm.sh
+?? usr/cat.c
+?? usr/crt0.S
+?? usr/echo.c
+?? usr/fs_demo.c
+?? usr/kill.c
+?? usr/libc.c
+?? usr/libc.h
+?? usr/libc_demo.c
+?? usr/libc_test.c
+?? usr/ls.c
+?? usr/mkdir.c
+?? usr/ps.c
+?? usr/pwd.c
+?? usr/rm.c
+?? usr/sleep.c
+?? usr/sync_demo.c
+?? usr/test.h
+?? usr/thread_demo.c
+?? usr/thread_runtime.h
+?? usr/uaccess_demo.c
+?? usr/vm_demo.c
