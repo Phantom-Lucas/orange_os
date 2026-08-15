@@ -17,15 +17,11 @@ suite_boot_quiet() {
         -m "${QEMU_MEMORY:-1G}" -smp "${QEMU_CPUS:-1}" -display none
     trap 'qemu_stop' EXIT
     qemu_wait_ready "$monitor_socket" || return 5
-    # QEMU can still be updating adjacent VGA cells after the first shell
-    # prompt appears.  A 20-second default leaves the stable-snapshot loop
-    # outside that boot-time write window; callers may override it explicitly.
-    sleep "${QEMU_BOOT_WAIT:-20}"
+    sleep "${QEMU_BOOT_WAIT:-15}"
 
     local attempt
     for ((attempt = 0; attempt < 30; attempt++)); do
-        monitor_send "$monitor_socket" "pmemsave 0xb8000 0xfa0 \"$vga_image\"" || return 5
-        output=$(monitor_decode_vga "$vga_image") || return 5
+        output=$(monitor_capture_vga_stopped "$monitor_socket" "$vga_image") || return 5
         if grep -Fq '[BOOT] kernel ready' <<<"$output" &&
            grep -Fq '[BOOT] storage ready' <<<"$output" &&
            grep -Fq '[BOOT] shell ready' <<<"$output" &&

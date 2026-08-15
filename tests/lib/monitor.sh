@@ -15,3 +15,16 @@ monitor_decode_vga() {
         awk '{printf "%c", $1; if (NR % 80 == 0) printf "\n"}' |
         tr -d '\000'
 }
+
+monitor_capture_vga_stopped() {
+    local socket=$1
+    local image=$2
+
+    monitor_send "$socket" stop || return 1
+    if ! monitor_send "$socket" "pmemsave 0xb8000 0xfa0 \"$image\""; then
+        monitor_send "$socket" cont || true
+        return 1
+    fi
+    monitor_send "$socket" cont || return 1
+    monitor_decode_vga "$image"
+}
