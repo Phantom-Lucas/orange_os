@@ -27,21 +27,21 @@ artifacts 路径:
 ## 当前登记
 
 ID: FLAKY-001
-状态: MITIGATED（统一 runner/兼容 Make 入口已稳定；legacy 直接脚本仍保留原 VGA 快照实现）
+状态: RESOLVED（2026-08-15；统一 runner 在 QEMU stop 状态下完成 VGA 原子快照）
 类型: flaky-test
-首次发现版本: 7f228c3dfbe229194e4f1a186032c90afb25f639（工作树 dirty）
+首次发现版本: ca8b1cc（全部 dirty worktree 修改纳入后的初始基线提交）
 影响 suite/case: boot.quiet；`make check-all` 中 `qemu-lba48` 后的 `qemu-boot-check`
 最小复现命令: `make qemu-lba48-check` 后执行 `bash -x tests/qemu_boot.sh`（需允许 QEMU Unix monitor socket）
 期望结果: VGA 快照同时包含 `[BOOT] kernel ready`、`[BOOT] storage ready`、`[BOOT] shell ready` 和 `orange:/$`
 实际结果: 偶尔在屏幕更新中间态读取 VGA，`[BOOT] shell ready` 被拆行并与 Shell 欢迎语交错，导致 grep 失败；独立重复 boot 可通过
-artifacts 路径: `build/baseline/2026-08/check-all-logs/06-boot-quiet.log`、`build/baseline/2026-08/check-all-logs-rerun/06-boot-quiet.log`
+artifacts 路径: `build/baseline/2026-08/check-all-logs/06-boot-quiet.log`、`build/baseline/2026-08/check-all-logs-rerun/06-boot-quiet.log`、`build/baseline/2026-08/frozen-check-all/20260815-101349-176348-20260815/boot/quiet/1/`
 临时规避方式: 保留失败日志并单独重跑；不得用无限重试将其标记为通过
-关闭条件: 统一 runner 使用稳定事件/串口或旧 VGA 读取具备稳定快照后，在相同 commit 和 seed 下完成 full 回归
+关闭条件: 已满足；`e07f6a0` 的 `monitor_capture_vga_stopped` 在相同 seed 下完成默认 boot 和完整 runner 矩阵，最终 artifacts 位于 `build/baseline/2026-08/frozen-check-all-final2/20260815-101753-178844-20260815/`
 
 ID: FLAKY-002
 状态: RESOLVED（2026-08-15；等待 `run: child completed` 后再取资源快照）
 类型: flaky-test
-首次发现版本: 7f228c3dfbe229194e4f1a186032c90afb25f639（工作树 dirty）
+首次发现版本: ca8b1cc（全部 dirty worktree 修改纳入后的初始基线提交）
 影响 suite/case: integration；`qemu_smoke.sh` 的 sync-demo 回收断言
 最小复现命令: `QEMU_BOOT_WAIT=20 make qemu-check`（需允许 QEMU Unix monitor socket）
 期望结果: sync-demo 完成后资源快照包含 `processes=2 threads=5`
@@ -50,4 +50,4 @@ artifacts 路径: `build/baseline/2026-08/check-all-logs-stabilized/13-integrati
 临时规避方式: 保留失败现场；增加等待时间只能用于诊断，不能当作关闭条件
 关闭条件: 已满足；`QEMU_BOOT_WAIT=20 make qemu-check`、统一 `integration.smoke` 和完整 runner 矩阵均通过，并保留该事件等待语义
 
-阶段 0 当前仍未冻结为可检出的 commit/tag；维护者确认纳入范围后需重新采集 source、environment 和完整测试结果。
+阶段 0 已冻结为可检出的 `baseline/2026-08` 分支和 `baseline-2026-08` annotated tag；source、environment、产物哈希和完整测试结果均已更新到冻结证据。

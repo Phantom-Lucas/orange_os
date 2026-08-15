@@ -1,14 +1,15 @@
-commit=7f228c3dfbe229194e4f1a186032c90afb25f639
-branch=dev0714
-tag=none (维护者尚未确认纳入范围，未创建基线 tag)
-captured=2026-08-14 Asia/Shanghai
-worktree=dirty
+code_commit=e07f6a019c45df5e6268d5213985cddc7a4ec184
+branch=baseline/2026-08
+tag=baseline-2026-08
+captured=2026-08-15 Asia/Shanghai
+worktree=clean at code/test freeze
 
-本记录采集时工作树已有大量 staged、unstaged 和 untracked 修改。阶段 0 没有执行 reset、checkout、无差别提交或删除；这些修改均保留给维护者审阅。
+维护者已明确授权将原 dirty worktree 的全部 129 个版本控制文件纳入基线。
+`code_commit` 包含源码、测试 runner、文档和基线报告；随后生成的元数据提交
+包含本文件的最终版本，tag 指向该最终元数据提交。
 
-采集时的工作树摘要：
-- staged/unstaged tracked changes: 45 个文件，约 6,521 行新增、1,534 行删除（以当时 `git diff --stat` 为准）
-- untracked source/docs/test files: 已存在，未纳入本次自动提交
-- build/：由基线命令生成，受 `.gitignore` 忽略
-
-后续若要把本记录升级为可检出的冻结基线，必须先人工确认文件纳入范围，再创建分支、提交和带注释 tag，并重新运行环境和测试采集。
+冻结过程：
+- `ca8b1cc`: baseline(S0.1) 初始纳入全部工作树修改
+- `446c48f`: 修复 boot VGA 等待窗口
+- `e07f6a0`: 使用 QEMU stop/pmemsave/cont 原子快照，作为最终代码/测试冻结点
+- 最终 `baseline-2026-08` tag 在元数据提交上创建

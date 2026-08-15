@@ -28,3 +28,7 @@ build/baseline/2026-08/check-all-runner-final/20260815-031259-144988-1786601191/
 最终兼容入口 `make check-all` 已实际执行并返回 0；12 个 `result.env` 均为
 `status=PASS`。runner artifacts 还记录 suite、case、seed、timeout、环境、
 命令和 QEMU 退出码，旧脚本的失败现场则保留在 baseline 日志目录。
+
+代码/测试冻结提交 `e07f6a0` 的最终 full runner 证据位于
+`build/baseline/2026-08/frozen-check-all-final2/20260815-101753-178844-20260815/`，
+同样包含 12 个 `status=PASS` 的 `result.env`。

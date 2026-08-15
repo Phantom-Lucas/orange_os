@@ -1,6 +1,8 @@
 # 2026-08 基线
 
-这是阶段 0 的工作区基线记录。源码基线指向当前 `HEAD`，但工作树在采集时是脏的；路线图要求的基线分支、提交和 tag 未在没有维护者确认的情况下创建。
+这是阶段 0 的可检出基线记录。代码/测试冻结点为
+`e07f6a019c45df5e6268d5213985cddc7a4ec184`，分支为
+`baseline/2026-08`，最终元数据提交打上 `baseline-2026-08` annotated tag。
 
 ## 采集内容
 
@@ -13,9 +15,9 @@
 ## 复现命令
 
 ```bash
-make clean
 make check
-CHECK_LOG_DIR=build/baseline/2026-08/check-all-logs make check-all
+ARTIFACTS_DIR=build/baseline/2026-08/frozen-check-all-final2 \
+  ./tests/run.sh --profile full --seed 20260815
 ```
 
 完整回归需要允许 QEMU 创建 Unix monitor socket。所有完整回归日志保存在 `build/baseline/2026-08/`，没有复制大段日志进文档。

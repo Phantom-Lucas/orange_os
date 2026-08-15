@@ -1,6 +1,7 @@
 # Stage 1 进展记录：统一测试 runner
 
-- Commit：`7f228c3dfbe229194e4f1a186032c90afb25f639`（工作树 dirty）
+- 代码/测试冻结 Commit：`e07f6a019c45df5e6268d5213985cddc7a4ec184`
+- 基线分支：`baseline/2026-08`；tag：`baseline-2026-08`
 - Date：2026-08-15（Asia/Shanghai）
 - Test protocol：runner manifest v1（结构化事件仍待阶段 2）
 - 状态：DONE；统一 runner、全部 suite 迁移、兼容入口和最终门禁均已通过
@@ -34,6 +35,8 @@ SYNC_TEST_ROUNDS=100 SYNC_WORKER_ROUNDS=20000 tests/run.sh ...   PASS
 ./tests/run.sh --case lba48.boot                                PASS
 ARTIFACTS_DIR=... ./tests/run.sh --profile full                 PASS
 ARTIFACTS_DIR=... make check-all                                PASS
+ARTIFACTS_DIR=build/baseline/2026-08/frozen-check-all-final2 \
+  ./tests/run.sh --profile full --seed 20260815                 PASS (12/12)
 ```
 
 完整 QEMU 命令均在受控权限下运行，以允许 Unix monitor socket。每个 case 的详细日志和镜像位于对应 `build/test-artifacts/<run-id>/` 目录。
@@ -50,6 +53,9 @@ ARTIFACTS_DIR=... make check-all                                PASS
 `build/baseline/2026-08/test-all-final/20260815-024249-125464-20260815/`。最终兼容入口
 `make check-all` 也已通过，artifact 位于
 `build/baseline/2026-08/check-all-runner-final/20260815-031259-144988-1786601191/`。
+代码/测试冻结提交的最终 full artifact 位于
+`build/baseline/2026-08/frozen-check-all-final2/20260815-101753-178844-20260815/`，12 个
+`result.env` 均为 `status=PASS`。
 迁移前后的对照以相同 suite/case 断言和退出码为准，旧日志作为参照，新 runner artifact 记录 seed、timeout、环境和 QEMU 退出码。
 
 ## 回退点
