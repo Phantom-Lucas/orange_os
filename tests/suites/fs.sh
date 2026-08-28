@@ -37,7 +37,7 @@ suite_fs_service() {
     first=$(<"$TEST_WORK_DIR/boot-1.txt")
     first_compact=${first//$'\n'/}
     grep -Fq 'fs demo PASSED' <<<"$first" || grep -Fq 'fs demo PASSED' <<<"$first_compact" || { echo '[fs.service] first fs demo missing' >&2; return 1; }
-    grep -Fq "Orange'S user shell ready" <<<"$first" || grep -Fq "Orange'S user shell ready" <<<"$first_compact" || { echo '[fs.service] first shell missing' >&2; return 1; }
+    grep -Fq "Orange/64 Terminal" <<<"$first" || grep -Fq "Orange/64 Terminal" <<<"$first_compact" || { echo '[fs.service] first shell missing' >&2; return 1; }
     grep -Fq 'file_objects=0 pipe_objects=0' <<<"$first" || grep -Fq 'file_objects=0 pipe_objects=0' <<<"$first_compact" || { echo '[fs.service] first file baseline missing' >&2; return 1; }
     grep -Fq 'heap_blocks=1' <<<"$first" || grep -Fq 'heap_blocks=1' <<<"$first_compact" || { echo '[fs.service] first heap block baseline missing' >&2; return 1; }
     grep -Fq 'heap_bytes=16384' <<<"$first" || grep -Fq 'heap_bytes=16384' <<<"$first_compact" || { echo '[fs.service] first heap byte baseline missing' >&2; return 1; }

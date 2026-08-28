@@ -16,6 +16,12 @@ monitor_decode_vga() {
         tr -d '\000'
 }
 
+monitor_screendump() {
+    local socket=$1
+    local image=$2
+    monitor_send "$socket" "screendump \"$image\""
+}
+
 monitor_capture_vga_stopped() {
     local socket=$1
     local image=$2

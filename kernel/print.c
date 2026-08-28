@@ -6,6 +6,7 @@
 #include "sync.h"
 #include "memory.h"
 #include "tty.h"
+#include "vga.h"
 
 static unsigned char current_color = 0x0F;
 
@@ -252,4 +253,6 @@ void panic_print_int(long val) {
 // 【新增】初始化打印机锁 (需要在 kernel_main 最早调用)
 void print_init(void) {
     mutex_init(&print_lock);
+    vga_apply_terminal_theme();
+    vga_set_block_cursor();
 }

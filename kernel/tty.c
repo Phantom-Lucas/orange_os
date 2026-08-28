@@ -7,14 +7,11 @@
 #include "ipc.h"
 #include "thread.h"
 #include "process.h"
+#include "qemu_fb.h"
 
-#define VGA_WIDTH 80
-#define VGA_HEIGHT 25
-#define VGA_CELLS (VGA_WIDTH * VGA_HEIGHT)
+#define VGA_WIDTH 80U
+#define VGA_HEIGHT 25U
 #define TTY_HISTORY_LINES 256
-#define TTY_HISTORY_CELLS (VGA_WIDTH * TTY_HISTORY_LINES)
-#define TTY_HISTORY_BYTES ((uint64_t)TTY_CONSOLE_COUNT * TTY_HISTORY_CELLS * sizeof(uint16_t))
-#define TTY_HISTORY_PAGES ((TTY_HISTORY_BYTES + PAGE_SIZE - 1) / PAGE_SIZE)
 #define VGA_DEFAULT_COLOR 0x0F
 #define TTY_INPUT_QUEUE_SIZE 4096
 #define TTY_MESSAGE_READ_REQUEST 0x54545901U
@@ -22,6 +19,14 @@
 #define TTY_MESSAGE_WRITE_REQUEST 0x54545903U
 #define TTY_MESSAGE_WRITE_REPLY   0x54545904U
 #define TTY_SERVICE_BUFFER_SIZE   4096U
+#define TTY_ANSI_MAX_SEQUENCE     32U
+
+enum tty_ansi_state {
+    TTY_ANSI_NORMAL = 0,
+    TTY_ANSI_ESC,
+    TTY_ANSI_CSI,
+    TTY_ANSI_DISCARD
+};
 
 /*
  * TTY IPC 不传递调用者栈指针或堆指针。旧实现把 request.value 指向
@@ -42,9 +47,18 @@ struct tty_console {
     uint32_t cursor;
     uint32_t line_count;
     uint32_t view_top;
+    uint8_t ansi_state;
+    uint8_t ansi_length;
+    uint8_t ansi_fg;
+    uint8_t ansi_bg;
+    uint8_t ansi_bold;
+    char ansi_sequence[TTY_ANSI_MAX_SEQUENCE];
 };
 
 static struct tty_console consoles[TTY_CONSOLE_COUNT];
+static struct tty_geometry tty_geometry = {
+    VGA_WIDTH, VGA_HEIGHT, TTY_HISTORY_LINES, 8, 16, 0, 0
+};
 static uint32_t active_console;
 static int initialized;
 static spinlock_t tty_lock;
@@ -54,6 +68,10 @@ static uint32_t input_tail;
 static struct thread* tty_input_service_task;
 static struct thread* tty_output_service_task;
 static uint32_t foreground_pid;
+
+static uint32_t tty_history_cells(void) {
+    return tty_geometry.columns * tty_geometry.history_rows;
+}
 
 static uint16_t hw_cursor_get(void) {
     uint16_t pos;
@@ -71,49 +89,168 @@ static void hw_cursor_set(uint16_t pos) {
     outb(0x3D5, (uint8_t)pos);
 }
 
+static void console_ansi_reset(struct tty_console* console) {
+    console->ansi_state = TTY_ANSI_NORMAL;
+    console->ansi_length = 0;
+    console->ansi_fg = 0x0F;
+    console->ansi_bg = 0;
+    console->ansi_bold = 0;
+}
+
 static void console_clear(struct tty_console* console) {
-    for (uint32_t i = 0; i < TTY_HISTORY_CELLS; i++) {
+    for (uint32_t i = 0; i < tty_history_cells(); i++) {
         console->cells[i] = ((uint16_t)VGA_DEFAULT_COLOR << 8) | ' ';
     }
     console->cursor = 0;
     console->line_count = 1;
     console->view_top = 0;
+    console_ansi_reset(console);
 }
 
-static void console_scroll_history(struct tty_console* console, uint8_t color) {
-    /* 源区域位于目标之后，内核 memcpy 的正向复制可安全完成下移。 */
-    memcpy(console->cells, console->cells + VGA_WIDTH,
-           (TTY_HISTORY_CELLS - VGA_WIDTH) * sizeof(uint16_t));
-    for (uint32_t i = TTY_HISTORY_CELLS - VGA_WIDTH;
-         i < TTY_HISTORY_CELLS; i++) {
-        console->cells[i] = ((uint16_t)color << 8) | ' ';
+static void console_put_char(struct tty_console* console, char c, uint8_t color);
+
+static uint8_t console_ansi_color(const struct tty_console* console) {
+    uint8_t foreground = console->ansi_fg & 0x07;
+    if (console->ansi_fg >= 8 || console->ansi_bold) foreground |= 0x08;
+    return (uint8_t)((console->ansi_bg & 0x07) << 4) | foreground;
+}
+
+static void console_ansi_apply_sgr(struct tty_console* console) {
+    uint32_t value = 0;
+    int have_value = 0;
+
+    /* Empty parameters are the SGR reset (ESC[m == ESC[0m). */
+    for (uint32_t i = 0; i <= console->ansi_length; i++) {
+        char byte = i < console->ansi_length ? console->ansi_sequence[i] : ';';
+        if (byte >= '0' && byte <= '9') {
+            if (value > 999U) return;
+            value = value * 10U + (uint32_t)(byte - '0');
+            have_value = 1;
+            continue;
+        }
+        if (byte != ';') return;
+
+        if (!have_value) value = 0;
+        switch (value) {
+        case 0:
+            console->ansi_fg = 0x0F;
+            console->ansi_bg = 0;
+            console->ansi_bold = 0;
+            break;
+        case 1:
+            console->ansi_bold = 1;
+            break;
+        case 30 ... 37:
+            console->ansi_fg = (uint8_t)(value - 30U);
+            break;
+        case 90 ... 97:
+            console->ansi_fg = (uint8_t)(value - 90U + 8U);
+            break;
+        case 40 ... 47:
+            console->ansi_bg = (uint8_t)(value - 40U);
+            break;
+        default:
+            /* Unknown SGR parameters have no visible effect, but the whole
+               bounded sequence is still consumed safely. */
+            break;
+        }
+        value = 0;
+        have_value = 0;
     }
-    console->cursor -= VGA_WIDTH;
+}
+
+static void console_ansi_finish(struct tty_console* console, char byte) {
+    if (console->ansi_state == TTY_ANSI_ESC) {
+        if (byte == '[') {
+            console->ansi_state = TTY_ANSI_CSI;
+            console->ansi_length = 0;
+        } else if (byte != '\033') {
+            console->ansi_state = TTY_ANSI_NORMAL;
+            console->ansi_length = 0;
+        }
+        return;
+    }
+
+    if (console->ansi_state == TTY_ANSI_DISCARD) {
+        if (byte == '\033') {
+            console->ansi_state = TTY_ANSI_ESC;
+        } else if ((unsigned char)byte >= 0x40U &&
+                   (unsigned char)byte <= 0x7EU) {
+            console->ansi_state = TTY_ANSI_NORMAL;
+        }
+        return;
+    }
+
+    if (byte == 'm') {
+        console_ansi_apply_sgr(console);
+        console->ansi_state = TTY_ANSI_NORMAL;
+        console->ansi_length = 0;
+        return;
+    }
+    if ((unsigned char)byte >= 0x40U && (unsigned char)byte <= 0x7EU) {
+        /* CSI commands other than SGR are intentionally ignored. */
+        console->ansi_state = TTY_ANSI_NORMAL;
+        console->ansi_length = 0;
+        return;
+    }
+    if ((byte >= '0' && byte <= '9') || byte == ';') {
+        if (console->ansi_length < TTY_ANSI_MAX_SEQUENCE) {
+            console->ansi_sequence[console->ansi_length++] = byte;
+        } else {
+            console->ansi_state = TTY_ANSI_DISCARD;
+        }
+        return;
+    }
+    console->ansi_state = TTY_ANSI_DISCARD;
+}
+
+static void console_put_user_char(struct tty_console* console, char byte) {
+    if (console->ansi_state == TTY_ANSI_NORMAL) {
+        if (byte == '\033') {
+            console->ansi_state = TTY_ANSI_ESC;
+            console->ansi_length = 0;
+        } else {
+            console_put_char(console, byte, console_ansi_color(console));
+        }
+        return;
+    }
+    console_ansi_finish(console, byte);
+}
+
+static void console_scroll_history(struct tty_console* console) {
+    /* 源区域位于目标之后，内核 memcpy 的正向复制可安全完成下移。 */
+    memcpy(console->cells, console->cells + tty_geometry.columns,
+           (tty_history_cells() - tty_geometry.columns) * sizeof(uint16_t));
+    for (uint32_t i = tty_history_cells() - tty_geometry.columns;
+         i < tty_history_cells(); i++) {
+        console->cells[i] = ((uint16_t)VGA_DEFAULT_COLOR << 8) | ' ';
+    }
+    console->cursor -= tty_geometry.columns;
     if (console->line_count > 1) console->line_count--;
 }
 
-static void console_make_cursor_room(struct tty_console* console, uint8_t color) {
-    while (console->cursor >= TTY_HISTORY_CELLS) {
-        console_scroll_history(console, color);
+static void console_make_cursor_room(struct tty_console* console) {
+    while (console->cursor >= tty_history_cells()) {
+        console_scroll_history(console);
     }
 }
 
 static void console_update_line_count(struct tty_console* console) {
-    uint32_t rows = console->cursor / VGA_WIDTH + 1;
-    if (rows > TTY_HISTORY_LINES) rows = TTY_HISTORY_LINES;
+    uint32_t rows = console->cursor / tty_geometry.columns + 1;
+    if (rows > tty_geometry.history_rows) rows = tty_geometry.history_rows;
     if (rows > console->line_count) console->line_count = rows;
 }
 
 static void flush_active_console(void);
 
 static void console_follow_bottom(struct tty_console* console) {
-    console->view_top = console->line_count > VGA_HEIGHT
-                            ? console->line_count - VGA_HEIGHT : 0;
+    console->view_top = console->line_count > tty_geometry.visible_rows
+                            ? console->line_count - tty_geometry.visible_rows : 0;
 }
 
 static void console_resume_live_view(struct tty_console* console) {
-    uint32_t bottom = console->line_count > VGA_HEIGHT
-                          ? console->line_count - VGA_HEIGHT : 0;
+    uint32_t bottom = console->line_count > tty_geometry.visible_rows
+                          ? console->line_count - tty_geometry.visible_rows : 0;
     if (console->view_top != bottom) {
         console->view_top = bottom;
         /* PageUp/PageDown 只改变显示窗口；第一次输入时恢复到活动行，
@@ -123,11 +260,11 @@ static void console_resume_live_view(struct tty_console* console) {
 }
 
 static void console_put_char(struct tty_console* console, char c, uint8_t color) {
-    console_make_cursor_room(console, color);
+    console_make_cursor_room(console);
     if (c == '\r') {
-        console->cursor = (console->cursor / VGA_WIDTH) * VGA_WIDTH;
+        console->cursor = (console->cursor / tty_geometry.columns) * tty_geometry.columns;
     } else if (c == '\n') {
-        console->cursor = (console->cursor / VGA_WIDTH + 1) * VGA_WIDTH;
+        console->cursor = (console->cursor / tty_geometry.columns + 1) * tty_geometry.columns;
     } else if (c == '\b') {
         if (console->cursor > 0) {
             console->cursor--;
@@ -137,16 +274,23 @@ static void console_put_char(struct tty_console* console, char c, uint8_t color)
         console->cells[console->cursor] = ((uint16_t)color << 8) | (uint8_t)c;
         console->cursor++;
     }
-    console_make_cursor_room(console, color);
+    console_make_cursor_room(console);
     console_update_line_count(console);
 }
 
 static void flush_active_console(void) {
-    volatile uint16_t* vga = (volatile uint16_t*)P2V(0xB8000UL);
     struct tty_console* console = &consoles[active_console];
-    uint32_t max_top = console->line_count > VGA_HEIGHT
-                           ? console->line_count - VGA_HEIGHT : 0;
+    uint32_t max_top = console->line_count > tty_geometry.visible_rows
+                           ? console->line_count - tty_geometry.visible_rows : 0;
     if (console->view_top > max_top) console->view_top = max_top;
+    if (qemu_fb_is_active()) {
+        uint32_t cursor_row = console->cursor / tty_geometry.columns;
+        qemu_fb_render_cells(console->cells, console->line_count, console->view_top,
+                             console->cursor, cursor_row >= console->view_top &&
+                             cursor_row < console->view_top + tty_geometry.visible_rows);
+        return;
+    }
+    volatile uint16_t* vga = (volatile uint16_t*)P2V(0xB8000UL);
     for (uint32_t row = 0; row < VGA_HEIGHT; row++) {
         uint32_t source_row = console->view_top + row;
         for (uint32_t col = 0; col < VGA_WIDTH; col++) {
@@ -156,9 +300,9 @@ static void flush_active_console(void) {
                               : ((uint16_t)VGA_DEFAULT_COLOR << 8) | ' ';
         }
     }
-    uint32_t cursor_row = console->cursor / VGA_WIDTH;
-    uint32_t cursor_col = console->cursor % VGA_WIDTH;
-    uint16_t screen_cursor = VGA_CELLS - 1;
+    uint32_t cursor_row = console->cursor / tty_geometry.columns;
+    uint32_t cursor_col = console->cursor % tty_geometry.columns;
+    uint16_t screen_cursor = VGA_WIDTH * VGA_HEIGHT - 1;
     if (cursor_row >= console->view_top &&
         cursor_row < console->view_top + VGA_HEIGHT) {
         screen_cursor = (uint16_t)((cursor_row - console->view_top) * VGA_WIDTH +
@@ -172,17 +316,20 @@ void tty_init(void) {
     mutex_init(&tty_input_request_lock);
     mutex_init(&tty_output_request_lock);
 
-    paddr_t pages = alloc_pages_owned(TTY_HISTORY_PAGES, PAGE_OWNER_TTY);
+    uint64_t bytes = (uint64_t)TTY_CONSOLE_COUNT * tty_history_cells() * sizeof(uint16_t);
+    if (bytes == 0 || bytes > UINT32_MAX) return;
+    paddr_t pages = alloc_pages_owned((uint32_t)((bytes + PAGE_SIZE - 1) / PAGE_SIZE),
+                                      PAGE_OWNER_TTY);
     if (pages == 0) return;
 
     uint16_t* backing = (uint16_t*)P2V(pages);
     volatile uint16_t* vga = (volatile uint16_t*)P2V(0xB8000UL);
     for (uint32_t i = 0; i < TTY_CONSOLE_COUNT; i++) {
-        consoles[i].cells = backing + i * TTY_HISTORY_CELLS;
+        consoles[i].cells = backing + i * tty_history_cells();
         console_clear(&consoles[i]);
     }
 
-    for (uint32_t i = 0; i < VGA_CELLS; i++) {
+    for (uint32_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
         consoles[0].cells[i] = vga[i];
     }
     consoles[0].cursor = hw_cursor_get();
@@ -193,6 +340,18 @@ void tty_init(void) {
     input_tail = 0;
     foreground_pid = 0;
     initialized = 1;
+}
+
+int tty_use_framebuffer_geometry(const struct tty_geometry* geometry) {
+    if (!geometry || geometry->columns < 40 || geometry->columns > 200 ||
+        geometry->visible_rows < 15 || geometry->visible_rows > 60 ||
+        geometry->history_rows < geometry->visible_rows || geometry->history_rows > 256)
+        return -1;
+    tty_geometry = *geometry;
+    initialized = 0;
+    tty_init();
+    if (initialized) tty_clear_active();
+    return initialized ? 0 : -1;
 }
 
 int tty_is_initialized(void) {
@@ -215,6 +374,20 @@ void tty_write_colored(const char* buffer, unsigned long length, uint8_t color) 
 
 void tty_write(const char* buffer, unsigned long length) {
     tty_write_colored(buffer, length, VGA_DEFAULT_COLOR);
+}
+
+void tty_write_user(const char* buffer, unsigned long length) {
+    if (!initialized || buffer == 0) return;
+
+    spinlock_acquire(&tty_lock);
+    struct tty_console* console = &consoles[active_console];
+    console_follow_bottom(console);
+    for (unsigned long i = 0; i < length; i++) {
+        console_put_user_char(console, buffer[i]);
+    }
+    console_follow_bottom(console);
+    flush_active_console();
+    spinlock_release(&tty_lock);
 }
 
 void tty_put_char_colored(char c, uint8_t color) {
@@ -247,6 +420,11 @@ void tty_input_char(char c) {
         }
     }
     spinlock_release(&tty_lock);
+}
+
+void tty_input_sequence(const char* sequence, unsigned long length) {
+    if (!sequence) return;
+    for (unsigned long i = 0; i < length; i++) tty_input_char(sequence[i]);
 }
 
 void tty_handle_input_char(char c) {
@@ -392,9 +570,9 @@ int tty_service_write(const char* buffer, unsigned long length) {
     if (!initialized || !buffer || length == 0) return -1;
 
     if (length > TTY_SERVICE_BUFFER_SIZE) return -1;
-    /* syscall 层已经把用户缓冲复制到内核；直接进入受 tty_lock
-       保护的输出路径，避免交互回显为每个批次再付出一次 IPC 往返。 */
-    tty_write(buffer, length);
+    /* syscall 层已经把用户缓冲复制到内核；只有未重定向的用户路径
+       解析 ANSI。tty_write_colored 保持内核原始彩色输出语义。 */
+    tty_write_user(buffer, length);
     return 0;
 }
 
@@ -430,14 +608,16 @@ void tty_scroll_active(int32_t lines) {
     spinlock_acquire(&tty_lock);
     struct tty_console* console = &consoles[active_console];
     int64_t top = (int64_t)console->view_top + lines;
-    uint32_t max_top = console->line_count > VGA_HEIGHT
-                           ? console->line_count - VGA_HEIGHT : 0;
+    uint32_t max_top = console->line_count > tty_geometry.visible_rows
+                           ? console->line_count - tty_geometry.visible_rows : 0;
     if (top < 0) top = 0;
     if ((uint64_t)top > max_top) top = max_top;
     console->view_top = (uint32_t)top;
     flush_active_console();
     spinlock_release(&tty_lock);
 }
+
+const struct tty_geometry* tty_get_geometry(void) { return &tty_geometry; }
 
 void tty_switch(uint32_t index) {
     if (!initialized || index >= TTY_CONSOLE_COUNT) return;

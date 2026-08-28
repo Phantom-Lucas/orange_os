@@ -97,7 +97,7 @@ wait_for_output() {
     while (( SECONDS < deadline )); do
         output=$(capture_vga)
         if grep -Fq "$expected" <<<"$output" &&
-           grep -Fq "orange:/$" <<<"$output"; then
+           grep -Fq "orange@orange-os:/$" <<<"$output"; then
             printf '%s\n' "$output"
             return 0
         fi
@@ -118,7 +118,7 @@ printf 'sendkey ctrl-c\n' | monitor_command >/dev/null
 sleep 1
 idle_control_output=$(capture_vga)
 if ! grep -Fq "^C" <<<"$idle_control_output" ||
-   ! grep -Fq "orange:/$" <<<"$idle_control_output"; then
+   ! grep -Fq "orange@orange-os:/$" <<<"$idle_control_output"; then
     echo "$idle_control_output" >&2
     echo "[qemu-input-stress] Ctrl+C scan code was not handled by the Shell" >&2
     exit 1
@@ -130,7 +130,7 @@ printf 'sendkey ctrl-c\n' | monitor_command >/dev/null
 sleep 2
 control_output=$(capture_vga)
 if ! grep -Fq "run: child terminated by exception" <<<"$control_output" ||
-   ! grep -Fq "orange:/$" <<<"$control_output"; then
+   ! grep -Fq "orange@orange-os:/$" <<<"$control_output"; then
     echo "$control_output" >&2
     echo "[qemu-input-stress] Ctrl+C did not return to the Shell" >&2
     exit 1
@@ -144,7 +144,7 @@ printf 'sendkey ctrl-c\n' | monitor_command >/dev/null
 sleep 2
 sync_control_output=$(capture_vga)
 if ! grep -Fq "run: child terminated by exception" <<<"$sync_control_output" ||
-   ! grep -Fq "orange:/$" <<<"$sync_control_output"; then
+   ! grep -Fq "orange@orange-os:/$" <<<"$sync_control_output"; then
     echo "$sync_control_output" >&2
     echo "[qemu-input-stress] Ctrl+C did not terminate multi-threaded foreground task" >&2
     exit 1
@@ -153,7 +153,7 @@ fi
 send_fast_echo_batch
 stress_output=$(wait_for_output "stress-20" 90)
 if ! grep -Fq "stress-20" <<<"$stress_output" ||
-   ! grep -Fq "orange:/$" <<<"$stress_output"; then
+   ! grep -Fq "orange@orange-os:/$" <<<"$stress_output"; then
     echo "$stress_output" >&2
     echo "[qemu-input-stress] fast input batch was lost or Shell stopped" >&2
     exit 1

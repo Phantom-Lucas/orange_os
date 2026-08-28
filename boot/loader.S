@@ -2,6 +2,15 @@
 ; ------------------------------------------------------------
 SECTION LOADER vstart=0x900
 
+%ifndef KERNEL_SECTORS
+    %error "KERNEL_SECTORS must be provided by the build"
+%endif
+
+KERNEL_START_LBA          equ 10
+KERNEL_PRELOADED_SECTORS  equ 42
+KERNEL_TAIL_START_LBA     equ KERNEL_START_LBA + KERNEL_PRELOADED_SECTORS
+KERNEL_TAIL_SECTORS       equ KERNEL_SECTORS - KERNEL_PRELOADED_SECTORS
+
 ; 入口跳转：跳过数据区
 jmp loader_start
 
@@ -99,19 +108,19 @@ loader_start:
 
     ; =========================================================
     ; MBR 只能安全读取到 0x6D00，避免覆盖自身位于 0x7C00 的代码。
-    ; 现在 Loader 已在 0x900 运行，因此由它继续把内核剩余的 146 个扇区
-    ; （LBA 52..197）加载到 0x6D00 之后，覆盖当前内核文件尾部。
+    ; 现在 Loader 已在 0x900 运行，因此由它按构建时注入的实际内核大小
+    ; 继续加载 LBA 52 之后的尾部，不再维护固定的 188-sector 窗口。
     ; 调用栈放在 0x1800，避开即将写入的内核区域。
     ; =========================================================
     mov sp, 0x1800
-    mov eax, 52
     ; 使用 EBX 作为 32 位物理写入游标，避免超过 64KiB 后 BX 回绕，
     ; 覆盖 IVT、E820 表和 BIOS 数据。
     mov ebx, 0x6d00
-    ; MBR 已加载 LBA 10..51，共 42 个扇区；这里补足到 Makefile 允许的
-    ; 188 个扇区，避免内核增长后 .rodata/.data 尾部仍停留在磁盘上。
-    mov cx, 146
-    call rd_disk_m_16
+%if KERNEL_TAIL_SECTORS > 0
+    mov dword [kernel_tail_lba], KERNEL_TAIL_START_LBA
+    mov word [kernel_tail_remaining], KERNEL_TAIL_SECTORS
+    call rd_disk_many_16
+%endif
 
     ; =========================================================
     ; 内存探测结束，时空胶囊已埋在 0x8000，继续原本的保护模式流程
@@ -140,6 +149,25 @@ loader_start:
 ; 调用约定与 MBR 中的版本一致：
 ; EAX=LBA, BX=目标物理地址, CX=扇区数。
 ; ------------------------------------------------------------
+rd_disk_many_16:
+.next_chunk:
+    mov ax, [kernel_tail_remaining]
+    cmp ax, 255
+    jbe .last_chunk
+    mov cx, 255
+    jmp .read_chunk
+.last_chunk:
+    mov cx, ax
+.read_chunk:
+    mov [kernel_tail_chunk], cx
+    mov eax, [kernel_tail_lba]
+    call rd_disk_m_16
+    movzx eax, word [kernel_tail_chunk]
+    add [kernel_tail_lba], eax
+    sub [kernel_tail_remaining], ax
+    jnz .next_chunk
+    ret
+
 rd_disk_m_16:
     mov esi, eax
     mov di, cx
@@ -188,6 +216,10 @@ rd_disk_m_16:
     dec di
     jnz .read_sector_loop
     ret
+
+kernel_tail_lba:       dd 0
+kernel_tail_remaining: dw 0
+kernel_tail_chunk:     dw 0
 
 ; 4. 32 位保护模式入口（在此处构建页表，准备起飞）
 ; ------------------------------------------------------------

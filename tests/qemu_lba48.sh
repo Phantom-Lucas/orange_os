@@ -49,7 +49,7 @@ QEMU_PID=""
 output=$(od -An -v -w2 -tu1 "$VGA_IMAGE" |
     awk '{printf "%c",$1;if(NR%80==0)printf "\n"}' | tr -d '\000')
 if ! grep -Fq "fs demo PASSED" <<<"$output" ||
-   ! grep -Fq "Orange'S user shell ready" <<<"$output"; then
+   ! grep -Fq "Orange/64 Terminal" <<<"$output"; then
     echo "[qemu-lba48] high-LBA filesystem boot failed" >&2
     printf '%s\n' "$output" >&2
     exit 1

@@ -30,7 +30,7 @@ suite_lba48_boot() {
     qemu_wait_exit
     output=$(monitor_decode_vga "$vga_image") || return 5
     assert_contains "$output" 'fs demo PASSED' || return $?
-    assert_contains "$output" "Orange'S user shell ready" || return $?
+    assert_contains "$output" "Orange/64 Terminal" || return $?
     printf '%s\n' "$output"
     printf '[lba48.boot] filesystem I/O above 128GiB: PASSED\n'
 }

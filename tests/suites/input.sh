@@ -50,7 +50,7 @@ suite_input_stress() {
         while (( SECONDS < deadline )); do
             current=$(capture_vga) || return 5
             if grep -Fq "$expected" <<<"$current" &&
-               grep -Fq 'orange:/$' <<<"$current"; then
+               grep -Fq 'orange@orange-os:/$' <<<"$current"; then
                 printf '%s\n' "$current"
                 return 0
             fi
@@ -68,7 +68,7 @@ suite_input_stress() {
     send_key ctrl-c || return 5
     sleep 1
     output=$(capture_vga) || return $?
-    if ! grep -Fq '^C' <<<"$output" || ! grep -Fq 'orange:/$' <<<"$output"; then
+    if ! grep -Fq '^C' <<<"$output" || ! grep -Fq 'orange@orange-os:/$' <<<"$output"; then
         printf '%s\n' "$output" >&2
         printf '[input.stress] idle Ctrl+C assertion failed\n' >&2
         return 1
@@ -80,7 +80,7 @@ suite_input_stress() {
     sleep 2
     output=$(capture_vga) || return $?
     if ! grep -Fq 'run: child terminated by exception' <<<"$output" ||
-       ! grep -Fq 'orange:/$' <<<"$output"; then
+       ! grep -Fq 'orange@orange-os:/$' <<<"$output"; then
         printf '%s\n' "$output" >&2
         printf '[input.stress] foreground sleep Ctrl+C assertion failed\n' >&2
         return 1
@@ -92,7 +92,7 @@ suite_input_stress() {
     sleep 2
     output=$(capture_vga) || return $?
     if ! grep -Fq 'run: child terminated by exception' <<<"$output" ||
-       ! grep -Fq 'orange:/$' <<<"$output"; then
+       ! grep -Fq 'orange@orange-os:/$' <<<"$output"; then
         printf '%s\n' "$output" >&2
         printf '[input.stress] foreground sync Ctrl+C assertion failed\n' >&2
         return 1
@@ -118,7 +118,7 @@ suite_input_stress() {
     done
 
     output=$(wait_for_output stress-20 90) || return $?
-    if ! grep -Fq 'stress-20' <<<"$output" || ! grep -Fq 'orange:/$' <<<"$output"; then
+    if ! grep -Fq 'stress-20' <<<"$output" || ! grep -Fq 'orange@orange-os:/$' <<<"$output"; then
         printf '%s\n' "$output" >&2
         printf '[input.stress] fast input batch assertion failed\n' >&2
         return 1

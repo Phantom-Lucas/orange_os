@@ -60,10 +60,10 @@ profile_includes() {
     local case_profile=$2
     case "$selected" in
         fast) [ "$case_profile" = fast ] ;;
-        # full is the complete pre-UART regression matrix, including cases
-        # tagged stress in the manifest; stress remains an explicit alias for
-        # running the same complete set.
-        full) return 0 ;;
+        # full is the release gate: include fast prerequisites and bounded
+        # functional cases, but leave host-speed-sensitive soak tests opt-in.
+        full) [ "$case_profile" = fast ] || [ "$case_profile" = full ] ;;
+        # stress is a superset so a soak run still proves the normal gate.
         stress) return 0 ;;
         *) return 1 ;;
     esac
@@ -138,14 +138,22 @@ run_case() {
 
     printf '[runner] START suite=%s case=%s iteration=%s seed=%s timeout=%s\n' \
         "$suite" "$case_name" "$iteration" "$seed" "$timeout_seconds"
-    export -f "$function_name" 2>/dev/null || {
-        artifacts_record_result "$case_dir" ERROR 127
-        printf '[runner] ERROR suite=%s case=%s function-not-exportable artifacts=%s\n' \
-            "$suite" "$case_name" "$case_dir" >&2
-        return 3
-    }
+    # A registered case may be a thin profile wrapper around another suite
+    # function (for example sync.stress -> sync.core).  Export the complete
+    # manifest function set so those dependencies survive the isolated child
+    # shell, and fail before execution if the manifest references a typo.
+    local registered_id registered_function
+    for registered_id in "${CASE_IDS[@]}"; do
+        registered_function=${CASE_FUNCTION[$registered_id]}
+        export -f "$registered_function" 2>/dev/null || {
+            artifacts_record_result "$case_dir" ERROR 127
+            printf '[runner] ERROR suite=%s case=%s function-not-exportable=%s artifacts=%s\n' \
+                "$suite" "$case_name" "$registered_function" "$case_dir" >&2
+            return 3
+        }
+    done
     local child_script
-    child_script="source '$RUNNER_DIR/lib/common.sh'; source '$RUNNER_DIR/lib/artifacts.sh'; source '$RUNNER_DIR/lib/qemu.sh'; source '$RUNNER_DIR/lib/monitor.sh'; source '$RUNNER_DIR/lib/image.sh'; source '$RUNNER_DIR/lib/assertions.sh'; source '$RUNNER_DIR/lib/events.sh'; $function_name"
+    child_script="source '$RUNNER_DIR/lib/common.sh'; source '$RUNNER_DIR/lib/artifacts.sh'; source '$RUNNER_DIR/lib/qemu.sh'; source '$RUNNER_DIR/lib/monitor.sh'; source '$RUNNER_DIR/lib/screenshot.sh'; source '$RUNNER_DIR/lib/image.sh'; source '$RUNNER_DIR/lib/assertions.sh'; source '$RUNNER_DIR/lib/events.sh'; $function_name"
     timeout --signal=TERM --kill-after=5 "$timeout_seconds" bash -c "$child_script" \
         >"$log_file" 2>&1
     local raw_status=$?
@@ -175,6 +183,9 @@ main() {
     local base_seed=$(( $(date +%s) ^ $$ ))
     local manifest=${RUNNER_MANIFEST:-$RUNNER_DIR/manifest.sh}
     RUN_ARTIFACTS_DIR=${ARTIFACTS_DIR:-$ROOT_DIR/build/test-artifacts}
+    # VGA snapshots are the test oracle for all non-framebuffer suites.  Keep
+    # that backend explicit while the interactive default remains graphical.
+    export CONSOLE_BACKEND=${TEST_CONSOLE_BACKEND:-vga}
     FILTER_SUITE=
     FILTER_CASE=
     FILTER_PROFILE=

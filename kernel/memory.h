@@ -54,6 +54,8 @@ typedef enum {
 #define PTE_P    0x01    // Present: 存在位 (1表示在物理内存中)
 #define PTE_RW   0x02    // Read/Write: 读写位 (1表示可读写)
 #define PTE_US   0x04    // User/Supervisor: 用户态位 (1表示Ring 3平民可访问)
+#define PTE_PWT  0x08    // Write-through; used for framebuffer MMIO.
+#define PTE_PCD  0x10    // Disable cache; used for framebuffer MMIO.
 #define PTE_PS   (1ULL << 7)
 /* 软件位：硬件忽略，表示该用户页是写时复制页。 */
 #define PTE_COW  (1ULL << 9)

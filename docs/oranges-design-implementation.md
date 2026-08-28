@@ -2,9 +2,9 @@
 
 ## 项目设计、实现细节与测试验证文档
 
-文档版本：1.0  
-适用代码：当前工作区版本  
-目标平台：x86_64、BIOS、QEMU  
+文档版本：1.2
+适用代码：`baseline/2026-08`；代码/测试冻结 commit `e07f6a0`，证据元数据 HEAD `55b5292`，tag `baseline-2026-08`
+目标平台：x86_64、BIOS、QEMU
 项目类型：教学型裸机操作系统
 
 ---
@@ -20,6 +20,8 @@
 本文的重点不是罗列接口名称，而是说明各子系统的职责边界、关键不变量、失败路径以及与原书章节的对应关系。对于当前仍然存在的单核、无网络、无动态链接、MyFS 固定起始位置和若干简化，也会在正文中明确标注。
 
 > 说明：仓库中早期的 `docs/project-overview.md` 曾保留“fork 全量复制”的旧描述；当前源码已经实现物理页引用计数和 COW，本文以当前源码和测试行为为准。
+
+> 基线状态（2026-08-15）：路线图阶段 0 和阶段 1 已完成。源码基线、环境、产物哈希和测试证据已经冻结；统一测试 runner、12 个 manifest case、公共 QEMU/monitor/artifacts 库和兼容 Make target 已落地。验收记录见 [`stage-0.md`](milestones/stage-0.md)、[`stage-1.md`](milestones/stage-1.md) 和 [`stage-1-comparison.md`](milestones/stage-1-comparison.md)。
 
 ## 目录
 
@@ -139,20 +141,20 @@ make BOOT_DIAGNOSTIC=1 run
 ```text
 QEMU_MEMORY = 1G
 QEMU_CPUS   = 1
-DISK_IMAGE  = hd8G.img
-DISK_SIZE   = 8G
+DISK_IMAGE  = build/images/orange-dev.img
+DISK_SIZE   = 256M
 ```
 
 例如：
 
 ```bash
-make DISK_IMAGE=hd2G.img DISK_SIZE=2G bootstrap
-make DISK_IMAGE=hd2G.img QEMU_MEMORY=1G QEMU_CPUS=1 run
+make DISK_IMAGE=build/images/orange-dev.img DISK_SIZE=256M bootstrap
+make DISK_IMAGE=build/images/orange-dev.img QEMU_MEMORY=1G QEMU_CPUS=1 run
 ```
 
 需要注意，QEMU 磁盘文件大小和 MyFS 可用容量仍是两个需要区分的量，但当前
 `tools/mkfs.c` 已按 `DISK_SIZE - FS_START_LBA * 512` 动态生成 MyFS 区域。默认
-8GiB 镜像的 MyFS 超级块记录为 2,097,027 个 4KiB 块、约 8,589,422,592 字节，
+256MiB 镜像的 MyFS 超级块记录为 65,411 个 4KiB 块、约 267,923,456 字节，
 数据区从动态计算的元数据末尾开始；因此磁盘尾部空间已经纳入文件系统管理。
 已有镜像不会自动扩容，改变 `DISK_SIZE` 时应使用新的镜像并重新格式化。
 
@@ -166,6 +168,7 @@ orange$ mkdir home
 orange$ echo hello > /home/a.txt
 orange$ cat /home/a.txt
 orange$ run thread-demo.elf
+orange$ demo
 orange$ exit
 ```
 
@@ -187,6 +190,8 @@ orange$ exit
 | `kernel/tty.*`、`keyboard.*` | TTY 服务、键盘输入、控制台和控制键。 |
 | `kernel/disk.*`、`fs.*`、`file.*` | ATA、MyFS、inode、路径、文件对象和管道。 |
 | `usr/` | 用户态启动代码、libc、Shell、命令和各类验收程序。 |
+| `usr/term.h` | Shell 使用的最小 ANSI SGR 样式常量。 |
+| `usr/showcase.c` | 用户态 ORANGE/64 六步 guided tour。 |
 | `tools/mkfs.c` | 制作 MyFS 镜像并打包用户程序。 |
 | `tests/` | 构建、启动、文件系统、Shell、输入、同步和虚拟内存测试。 |
 | `docs/` | 项目路线、总览和本设计实现文档。 |
@@ -801,6 +806,86 @@ buffer cache 负责减少重复磁盘访问，并在写回时把脏块提交到 
 | `mkdir/rm/pwd` | `mkdir d`、`rm f`、`pwd` | 目录创建、文件删除和 cwd 查询。 |
 | `ps/sleep/kill` | `ps`、`sleep 20`、`kill pid` | 进程状态、定时阻塞和简化终止。 |
 
+## 3.14 Modern VGA Shell 与 ORANGE/64 Showcase
+
+Shell 保留 80x25 VGA 文本模式和 ASCII 输出，不使用 framebuffer、图形模式、Unicode、
+动态字体或第三方库。`kernel/vga.c` 在 `print_init()` 中通过 VGA DAC（`0x3C8/0x3C9`）
+应用深紫背景 `#300A24`、柔和白色 `#F2F2F2` 和红/绿/黄/青等状态色；VGA cell 的
+默认属性仍为 `0x0F`。panic 使用的 `0x4F` 仍是红底白字，光标使用 CRTC 的块状形状。
+
+启动后的 Shell 文本保持简洁：
+
+```text
+Orange/64 Terminal
+Type 'help' to list commands.
+
+orange@orange-os:/$
+```
+
+不再把 dashboard 卡片作为当前主题的一部分。Prompt 的用户名、host 和 cwd 均为 ASCII
+文本；cwd 继续由成功的 `cd` 更新，控制键和控制台切换保留原有语义。
+
+`kernel/tty.c` 只在未重定向的用户 TTY 输出路径解析有限 ANSI SGR：`ESC[0m`、
+`ESC[1m`、`ESC[30-37m`、`ESC[90-97m` 和背景 `ESC[40-47m`。解析状态、颜色、
+bold 标志和未完成序列都保存在每个 VGA console 中；`tty_write_colored` 仍是内核
+原始彩色 API。`clear`、console 初始化会复位解析状态；未知、损坏或超过固定缓冲区
+的序列会被丢弃，不写入 VGA/history。TTY 锁内的解析路径不分配内存、不打印日志。
+Shell 在 stdout 被重定向或写入 pipe 时关闭自己的样式字节，普通文件和 pipe 内容
+不会被 dashboard/prompt 的终端控制序列污染。
+
+新增命令如下：
+
+```text
+orange@orange-os:/$ help
+orange@orange-os:/$ about
+orange@orange-os:/$ demo
+```
+
+`help` 使用不超过 80 列的纵向列表；`about` 清屏并重绘简洁欢迎页；`demo` 等价于
+运行 `showcase.elf`。Shell 原有 Ctrl+C、Ctrl+\\、Ctrl+Z、Ctrl+L、
+Ctrl+U、Ctrl+W、Ctrl+D、F1/F2/F3 和 PageUp/PageDown 行为保持不变。
+
+ANSI SGR 解析是现有 WIP 的独立可选能力，不是主题门禁；本版默认 Shell 文本不发送
+样式控制字节，因此重定向和 pipe 内容不会依赖 ANSI。若保留该解析器，它只能继续支持
+固定的小子集，不能宣称为完整 ANSI/VT100 terminal emulator。
+
+`showcase.elf` 完全运行在用户态，不增加展示专用内核 syscall，输出最多约两屏且
+固定为以下六步：
+
+```text
+ORANGE/64 GUIDED TOUR
+[1/6] SYSTEM
+[2/6] PROCESS + COW
+[3/6] IPC
+[4/6] THREADS
+[5/6] FILESYSTEM
+[6/6] FAULT ISOLATION
+RESULT 6 passed 0 failed
+```
+
+SYSTEM 使用 `getpid/get_ticks/ps` 显示 PID、ticks、进程数、线程数和当前用户页数；
+PROCESS + COW 使用一页匿名 mmap、父子写入和 wait；IPC 验证指定来源、同步唤醒、
+`0xC0DE` 回传和退出状态；THREADS 创建四个线程，用用户 mutex 更新共享 counter，
+校验 TID、退出码和 counter；FILESYSTEM 创建或截断 `demo-proof.txt`，写入并重新
+打开读取固定内容 `ORANGE/64 showcase proof v1`，然后 stat 并保留文件；FAULT
+ISOLATION spawn `fault.elf`，确认异常退出后 showcase 仍能打印汇总。任一步失败只
+增加失败数，最后以非零状态退出。
+
+主题演示使用与默认磁盘隔离的入口：`make showcase-prepare` 创建或重建
+`build/showcase-demo.img`，`make showcase` 以 512MiB、单核和标题
+`Orange/64 Terminal` 启动正常 QEMU 窗口。`showcase.elf` 是独立的用户态功能导览，
+本主题只将 `screendump` 生成的 `terminal-theme.ppm` 作为真实颜色验收 artifact。
+
+限制：showcase 的 ticks、PID、TID 和页数是运行时值；MyFS 仍无日志式崩溃一致性，
+文件持久化演示验证的是正常 QEMU 关闭/重启；Loader 的当前内核窗口仍是 188 sectors /
+96,256B，新增内核代码必须继续通过 `make check`，不能用删除已有功能换取空间。
+
+本轮主题验收（2026-08-15）记录如下：默认主题构建的 `kernel.bin` 为 92,036B，
+修改前基线为 91,692B；VGA DAC 实际截图背景为约 `RGB(48,8,39)`，在目标
+`#300A24` 的量化容差内。完整 `make check-all` 使用 seed `1786775869` 的 13 个
+case 全部通过；`terminal-theme.ppm`、`vga.bin`、`vga.txt`、`qemu.log` 和结果元数据
+位于 `build/test-artifacts/20260815-180436-12425-1786775869/showcase/core/1/`。
+
 ---
 
 # 四、系统测试与验证
@@ -818,6 +903,10 @@ buffer cache 负责减少重复磁盘访问，并在写回时把脏块提交到 
 - 快速输入不会使 Shell 永久阻塞；
 - QEMU 重启后文件内容仍然存在。
 
+所有测试现由 `tests/run.sh` 统一编排，`tests/manifest.sh` 声明 suite、case、profile、timeout 和执行函数。公共逻辑位于 `tests/lib/`，负责临时工作目录、QEMU 生命周期、monitor/VGA、镜像、断言、事件和 artifacts。旧 `qemu_*.sh` 脚本仍作为迁移对照保留，但 Make target 已转发到统一 runner，不再由每个入口分别实现 QEMU 启停和清理。
+
+runner 统一区分以下结果：断言失败、参数/manifest 错误、构建或依赖错误、超时和 QEMU/monitor 基础设施错误。每个 case 都写入 `result.env`、`environment.txt`、`command.txt`、`test.log` 和必要的 QEMU/VGA 现场，因此测试失败不能只依赖终端最后一屏判断。
+
 ## 4.2 静态构建检查
 
 `make check` 调用 `tests/check_build.sh`，检查：
@@ -834,20 +923,38 @@ buffer cache 负责减少重复磁盘访问，并在写回时把脏块提交到 
 
 ## 4.3 QEMU 测试矩阵
 
-| 命令 | 覆盖内容 |
-| --- | --- |
-| `make mkfs-index-check` | 宿主机验证 64 位文件大小、一级/二级间接索引镜像制作。 |
-| `make qemu-boot-check` | 简略启动、磁盘 gate、Shell ready 和基本启动输出。 |
-| `make qemu-fs-check` | MyFS 重启持久化、目录、dup、pipe 和文件资源。 |
-| `make qemu-shell-fs-check` | Shell 命令、cwd、重定向、管道和外部命令。 |
-| `make qemu-input-stress-check` | Ctrl+C、Ctrl+\\、快速键盘输入、提示符恢复。 |
-| `make qemu-userland-check` | crt0、argv、libc、malloc、errno、命令程序。 |
-| `make qemu-sync-check` | mutex、条件变量、futex、TLS、线程生命周期和压力。 |
-| `make qemu-vm-check` | COW、mmap/munmap、栈增长、页故障和资源回收。 |
-| `make qemu-check`（兼容入口） | 启动、fork、持久化、Shell、spawn/exec、IPC、故障隔离综合回归。 |
-| `make check-all` | 静态、启动、FS、Shell、用户态、输入、同步、VM 和集成全矩阵。 |
+统一入口如下：
 
-测试脚本会使用 `/tmp` 创建临时磁盘和 QEMU monitor，不覆盖项目中的持久化镜像。测试完成后清理临时目录；若要保留失败现场，可使用脚本提供的保留临时文件选项。
+| 命令 | 作用 |
+| --- | --- |
+| `make test-list` | 只列出 manifest，不构建、不启动 QEMU。 |
+| `make test-self` | 验证 list/filter、timeout=4、cleanup、重复 manifest 和 SIGTERM 处理。 |
+| `make test-fast` | 运行 `build.artifacts` 与 `mkfs.index`。 |
+| `make test CASE=vm.cow` | 只运行一个具名 case。 |
+| `make test SUITE=mkfs` | 运行一个 suite 的全部 case。 |
+| `make test CASE=sync.core REPEAT=3 SEED=20260815 KEEP_FAILED=1` | 固定 seed 重复运行并保留失败现场。 |
+| `make test-all` | 运行 full profile。 |
+| `make check-all` | 兼容的全矩阵入口，转发到 `make test-all`。 |
+
+当前 manifest 包含 13 个 case：
+
+| Case | Profile | 覆盖内容 |
+| --- | --- | --- |
+| `build.artifacts` | fast | MBR、Loader、Kernel、ELF 和 MyFS 静态检查。 |
+| `mkfs.index` | fast | 64 位文件大小与多级索引镜像制作。 |
+| `mkfs.lba48` | full | 超过 LBA28 边界的宿主机格式化。 |
+| `boot.quiet` | full | 简略启动、storage gate、Shell ready 和稳定 VGA 快照。 |
+| `lba48.boot` | full | 256GiB 稀疏盘和高 LBA MyFS 启动。 |
+| `fs.service` | full | 持久化、目录、fd、dup、pipe 和资源回收。 |
+| `tty.shell` | full | cwd、重定向、管道和 Shell 外部命令。 |
+| `userland.core` | full | crt0、argv、libc、malloc、errno 和命令程序。 |
+| `input.stress` | stress | Ctrl+C、Ctrl+\\、快速键盘输入和提示符恢复。 |
+| `sync.core` | full | mutex、条件变量、futex、TLS、线程生命周期和压力。 |
+| `vm.cow` | full | COW、mmap/munmap、栈增长、页故障和资源回收。 |
+| `integration.smoke` | full | 启动、持久化、fork/exec、IPC、sync、VM 和异常隔离。 |
+| `showcase.core` | full | 六步用户态 guided tour、prompt 恢复、proof 文件和重启持久化。 |
+
+旧 `make qemu-*-check` 和 `make mkfs-*-check` 入口仍可使用，当前均转发到上表对应 case。新 runner 默认把结果写入 `build/test-artifacts/<run-id>/<suite>/<case>/<iteration>/`；可用 `ARTIFACTS_DIR` 改变根目录，用 `KEEP_FAILED=1` 保留失败工作目录。较长的 monitor socket 自动缩短到 `/tmp/oranges-qemu-*.sock`，因此运行 QEMU 测试的环境必须允许创建 Unix socket；若被沙箱拒绝，runner 会记录 `INFRASTRUCTURE_ERROR`，而不是误报为内核断言失败。
 
 ## 4.4 启动和文件系统测试
 
@@ -984,24 +1091,48 @@ heap_arenas=1 heap_blocks=5 heap_bytes=240
 
 ## 4.10 已有测试结果与发布前要求
 
-当前已有的验证记录包括：
+阶段 0/1 的冻结验收已经完成，不再使用“尚未重跑最终矩阵”的旧状态：
 
-- `make check` 通过；
-- Ctrl+C 前台归属修复后的 `qemu-input-stress-check` 通过；
-- 修复后的低轮次 `qemu-sync-check` 通过，futex waiter、线程和用户映射统计回到预期；
-- 之前的完整 QEMU 回归在 `SYNC_TEST_ROUNDS=100`、`SYNC_WORKER_ROUNDS=20000`、`VM_TEST_ROUNDS=32` 参数下通过；
-- 512MiB 和 2GiB QEMU 资源配置均有回归记录，当前仍应保持单 CPU。
+- 代码/测试冻结 commit `e07f6a0` 使用 seed `20260815` 执行 full profile，12/12 case 全部 PASS；证据位于 `build/baseline/2026-08/frozen-check-all-final2/20260815-101753-178844-20260815/`。
+- `tests/selftest_runner.sh`、`make test-fast`、所有旧入口对照和 `make check-all` 均有 PASS 记录。
+- `FLAKY-001` 的非原子 VGA 快照和 `FLAKY-002` 的子进程回收时序已经修复并关闭。
+- 当前基线分支、commit/tag、工具链和产物哈希记录见 `docs/baselines/2026-08/` 与 `docs/milestones/`。
 
-由于 Ctrl+C 前台 PID 修复是在上一次完整矩阵之后加入的，正式提交或发布前仍应重新执行一次：
+2026-08-15 在证据元数据 HEAD `55b5292` 上又进行了一次独立复核：
+
+| 验证 | 结果 | Artifact |
+| --- | --- | --- |
+| Shell 语法、`--list`、runner selftest | PASS | 终端复核；manifest 共 13 case |
+| `make test-fast` | PASS（2/2） | `build/test-artifacts/20260815-105948-85-1786762865/` |
+| `make check-all` | 前 9 个 case PASS；`sync.core` 在 900 秒门限 TIMEOUT | `build/test-artifacts/20260815-110053-199644-1786568121/` |
+| `sync.core`，10×20,000，seed 20260815 | PASS | `build/test-artifacts/20260815-112239-212651-20260815/` |
+| `vm.cow`，默认 32 轮 | PASS | `build/test-artifacts/20260815-112423-213600-20260815/` |
+| `integration.smoke`，sync 10×20,000、VM 32 轮 | PASS | `build/test-artifacts/20260815-112508-214015-20260815/` |
+| `showcase.core`，seed 20260815 | PASS | `build/test-artifacts/20260815-141250-13695-20260815/` |
+| 本轮显式矩阵：boot/tty/input/showcase/vm，seed 20260815 | PASS | 分别保留在 `build/test-artifacts/20260815-140746-10778-20260815/`、`20260815-140821-10964-20260815/`、`20260815-141051-12804-20260815/`、`20260815-141250-13695-20260815/`、`20260815-141337-14105-20260815/` |
+| 本轮 `make check-all` | FAIL：`integration.smoke` 在 `thread-demo.elf` 加载处失败；不是 `INFRASTRUCTURE_ERROR`，也不是超时 | `build/test-artifacts/20260815-141503-14550-1786788656/` |
+
+本分支最后一次 quiet `make check` 的 `kernel.bin` 为 91,692B；`showcase.core` 使用的
+诊断启动构建为 93,500B，均低于 188 sectors / 96,256B。`showcase.elf` 为 26,440B。
+
+本轮 `integration.smoke` 的失败现场显示，8GiB MyFS 镜像内的 `thread-demo.elf` 字节内容
+与构建产物一致；干净启动后直接运行它在 64MiB 和保留的 8GiB 镜像上都通过，但在
+`hello/exec/ipc/uaccess` 前置序列后加载失败。失败返回路径是既有 ELF loader 的
+`[ELF] Failed to load.`，当前尚未定位到具体资源或地址空间原因，不能把这次
+`make check-all` 记为全量通过。独立 `showcase.core` 仍完整通过；该集成回归风险需在
+后续修复或复现后重新执行，不应通过降低轮次、增加 sleep 或跳过旧功能来掩盖。
+
+本轮 full profile 的 sync 超时前已完成 mutex、condvar、broadcast、线程生命周期、detach 和 futex 参数校验，并持续输出 stress progress；没有 `sync demo FAILED` 或 QEMU 错误。同一代码冻结点此前在相同 900 秒 manifest 门限内完整通过，因此当前证据支持“阶段 0/1 功能完成”，但也暴露了默认 100×20,000 压力负载对宿主机性能敏感。不能把这次 TIMEOUT 写成 PASS，也不能仅靠无限重试掩盖。后续应把功能门禁和长压力 profile 的耗时预算分开，并记录宿主机/QEMU 版本、seed、轮次和实际耗时。
+
+正式发布仍应执行：
 
 ```bash
-SYNC_TEST_ROUNDS=100 \
-SYNC_WORKER_ROUNDS=20000 \
-VM_TEST_ROUNDS=32 \
+make test-self
+make test-fast
 make check-all
 ```
 
-只有这次完整矩阵在最新源码上通过，才能把“已完成”升级为“最终集成回归已确认”。文档不把尚未重跑的最后一轮结果伪装成已验证结果。
+若 `sync.core` 超时，先使用同一 seed 保留 artifact，再运行较低轮次确认功能路径；调整 manifest timeout 或压力规模必须作为独立测试策略变更评审，不能在失败后临时扩大门限并把原结果改写为通过。
 
 ---
 
@@ -1138,17 +1269,17 @@ make check-all
 
 ## 6.1 近期应优先完成的工作
 
-### 6.1.1 重新执行最终集成回归
+### 6.1.1 稳定 full 与 stress 的时间预算
 
-Ctrl+C 前台 PID 修复涉及 Shell、TTY、进程 wait 和多线程同步压力，应重新执行完整 `make check-all`，并保留日志。需要分别记录 512MiB/1 CPU 和 2GiB/1 CPU 结果。
+阶段 0/1 已有冻结后的 12/12 PASS 证据，但独立复核中默认 `sync.core` 在较慢宿主环境达到 900 秒门限。应测量 10/50/100 轮的实际耗时，明确 full profile 是固定工作量还是固定时间预算，并把更重的随机重复放入 stress profile。需要分别记录 512MiB/1 CPU 和 2GiB/1 CPU 结果，超时必须保留 seed 和 artifacts。
 
-### 6.1.2 统一项目文档
+### 6.1.2 进入阶段 2：串口和结构化事件
 
-清理旧文档中与源码冲突的“fork 全量复制”表述，统一使用 COW、VMA、TLS 和当前资源基线。每次新增系统调用或改变测试基线时，同步更新 `Makefile help`、项目总览和本文。
+阶段 1 已统一宿主机 runner，但 QEMU case 仍主要依赖 sendkey 和 VGA 快照。下一步应实现 COM1 日志镜像、稳定的 `[TEST]`/`[RESOURCE]` 事件和 `isa-debug-exit`，使非交互 case 不再依赖屏幕最后一页，并让长压力测试能直接报告轮次进度。
 
 ### 6.1.3 完善失败诊断
 
-保留当前轻量资源统计，真实出现泄漏时再打开调用点记录。日志应区分启动摘要、测试摘要和详细诊断，避免日常 Shell 被大量内部测试输出淹没。
+在现有 `result.env`、environment、command、test/qemu/VGA artifacts 基础上增加统一资源前后差异、monitor 超时现场和可复制复现命令。日志应区分启动摘要、结构化测试事件和详细诊断，避免日常 Shell 被大量内部测试输出淹没。
 
 ## 6.2 中期工作
 
@@ -1181,8 +1312,8 @@ Ctrl+C 前台 PID 修复涉及 Shell、TTY、进程 wait 和多线程同步压�
 make build
 make check
 
-# 创建 8GB 磁盘、1GB 内存、单 CPU 的默认实验环境
-make DISK_IMAGE=hd8G.img DISK_SIZE=8G bootstrap
+# 创建 256MiB 磁盘、1GB 内存、单 CPU 的默认实验环境
+make DISK_IMAGE=build/images/orange-dev.img DISK_SIZE=256M bootstrap
 make QEMU_MEMORY=1G QEMU_CPUS=1 run
 
 # 只更新内核，保留用户文件
@@ -1193,18 +1324,22 @@ make run
 make BOOT_DIAGNOSTIC=1 run
 
 # 运行单项回归
-make qemu-fs-check
-make qemu-shell-fs-check
-make qemu-input-stress-check
-make qemu-userland-check
-make qemu-sync-check
-make qemu-vm-check
+make test-list
+make test-self
+make test-fast
+make test CASE=fs.service
+make test CASE=tty.shell
+make test CASE=input.stress
+make test CASE=userland.core
+make test CASE=sync.core SEED=20260815 KEEP_FAILED=1
+make test CASE=vm.cow
 
 # 最终全量验收
-SYNC_TEST_ROUNDS=100 \
-SYNC_WORKER_ROUNDS=20000 \
-VM_TEST_ROUNDS=32 \
 make check-all
+
+# 兼容入口仍可使用，例如
+make qemu-fs-check
+make qemu-sync-check
 ```
 
 ## 附录 B：Shell 命令示例
@@ -1224,6 +1359,9 @@ orange$ run thread-demo.elf
 orange$ run sync-demo.elf
 orange$ run vm-demo.elf
 orange$ run fs-demo.elf
+orange$ demo
+orange$ cat demo-proof.txt
+orange$ about
 orange$ run fault.elf
 orange$ ps
 orange$ sleep 100 &
@@ -1300,17 +1438,22 @@ kernel/futex.h
 
 ## 附录 E：最终验收清单
 
-- [ ] `make check` 通过。
-- [ ] `make qemu-boot-check` 通过，启动输出简洁且 Shell 可用。
-- [ ] `make qemu-fs-check` 通过，重启后文件存在。
-- [ ] `make qemu-shell-fs-check` 通过，cwd、管道和重定向正常。
-- [ ] `make qemu-input-stress-check` 通过，Ctrl+C 和快速输入正常。
-- [ ] `make qemu-userland-check` 通过，libc、argv、errno 和命令程序正常。
-- [ ] `make qemu-sync-check` 通过，mutex、条件变量、futex、TLS 和线程回收正常。
-- [ ] `make qemu-vm-check` 通过，COW、mmap、栈增长和页故障正常。
-- [ ] 512MiB/1 CPU QEMU 全量回归通过。
+- [x] 基线分支、冻结 commit 和 annotated tag 可检出。
+- [x] 环境、产物哈希、known issues 和阶段验收记录已归档。
+- [x] `make test-list` 列出 13 个 manifest case。
+- [x] `make test-self` 通过。
+- [x] `make test-fast` 通过。
+- [x] 冻结 commit 的 `make check-all` 通过（12/12）。
+- [x] `boot.quiet`、`fs.service`、`tty.shell`、`userland.core`、`input.stress` 通过。
+- [x] `vm.cow` 默认 32 轮通过。
+- [x] `sync.core` 10×20,000 功能回归通过。
+- [x] `integration.smoke` 在 sync 10×20,000、VM 32 轮下通过。
+- [x] `showcase.core` 六步、prompt、proof 文件和重启持久化通过。
+- [ ] 当前分支最新 `make check-all` 全量通过；本轮在 `integration.smoke` 的
+  `thread-demo.elf` 加载阶段失败，现场已保留。
+- [ ] 当前宿主环境再次执行默认 sync 100×20,000 时在 900 秒内通过。
 - [ ] 2GiB/1 CPU QEMU 全量回归通过。
-- [ ] 同步和线程生命周期压力测试连续 100 轮通过。
+- [x] 冻结验收中的同步和线程生命周期压力测试连续 100 轮通过。
 - [ ] PMM owner、refcount、heap、进程、线程、futex、file object 和 pipe 资源回到基线。
 - [ ] 没有死锁、忙等、丢失唤醒、重复唤醒、双重释放或 zombie 泄漏。
 - [ ] 文档中的“已完成”状态与源码、测试和限制保持一致。
@@ -1321,4 +1464,6 @@ kernel/futex.h
 
 Orange'S x86_64 项目已经从一个启动实验发展为具备完整用户态运行闭环的教学操作系统：它能够启动、隔离用户程序、调度多个进程和线程、处理同步与阻塞、管理虚拟内存、读写持久化文件、运行 Shell 命令，并通过自动化测试观察资源是否正确回收。
 
-它与原书的关系不是“完全相同的代码”，而是“相同的操作系统主线，不同的 64 位实现”。原书中的 MBR、保护、进程、TTY、IPC、文件系统和 Shell 主线均能在本项目中找到对应模块；LDT、FAT12、Ring 1、`int 0x90` 等 32 位路径则被四级页表、Ring 3、ELF64 和 `syscall` 替代。项目后续最重要的不是继续无边界增加接口，而是完成最新源码上的最终集成回归、统一文档状态、收紧模块边界，并在此基础上再推进 SMP、VFS、日志文件系统和网络等大型功能。
+它与原书的关系不是“完全相同的代码”，而是“相同的操作系统主线，不同的 64 位实现”。原书中的 MBR、保护、进程、TTY、IPC、文件系统和 Shell 主线均能在本项目中找到对应模块；LDT、FAT12、Ring 1、`int 0x90` 等 32 位路径则被四级页表、Ring 3、ELF64 和 `syscall` 替代。
+
+路线图阶段 0 和阶段 1 已经完成：项目现在拥有可检出的冻结基线和统一测试入口。下一步重点是解决长压力测试预算对宿主机性能敏感的问题，并进入阶段 2，用 UART、结构化事件和自动退出取代非交互测试对 VGA/sendkey 的依赖；随后再推进统一内核测试 API、IPC/服务边界、安全启动、SMP、VFS、日志文件系统和网络等大型功能。

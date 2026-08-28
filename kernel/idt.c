@@ -147,17 +147,37 @@ void isr32_timer(struct interrupt_frame* frame)
 // 33 号中断：键盘处理函数
 __attribute__((interrupt))
 void isr33_keyboard(struct interrupt_frame* frame) {
-    unsigned char scan_code = inb(0x60);
-    keyboard_handle_scancode(scan_code);
+    unsigned int drained = 0;
+    (void)frame;
+
+    /* One IRQ can cover more than one queued controller byte when the guest is
+       briefly busy rendering or running a syscall.  Reading only port 0x60
+       once can leave a make/break byte pending without another usable edge,
+       which presents as dropped or reordered characters under HMP sendkey.
+       Drain the output buffer with a defensive bound before acknowledging PIC. */
+    do {
+        keyboard_handle_scancode(inb(0x60));
+        drained++;
+    } while (drained < 64 && (inb(0x64) & 0x01));
 
     struct keyboard_event event;
     while (keyboard_pop_event(&event)) {
         if (event.type == KEYBOARD_EVENT_SWITCH_CONSOLE) {
             tty_switch(event.console_index);
         } else if (event.type == KEYBOARD_EVENT_SCROLL_UP) {
-            tty_scroll_active(-24);
+            const struct tty_geometry* geometry = tty_get_geometry();
+            tty_scroll_active(-(int32_t)(geometry->visible_rows - 1));
         } else if (event.type == KEYBOARD_EVENT_SCROLL_DOWN) {
-            tty_scroll_active(24);
+            const struct tty_geometry* geometry = tty_get_geometry();
+            tty_scroll_active((int32_t)(geometry->visible_rows - 1));
+        } else if (event.type == KEYBOARD_EVENT_SPECIAL) {
+            static const char* sequences[] = {
+                "\033[D", "\033[C", "\033[H", "\033[F", "\033[3~",
+                "\033[A", "\033[B"
+            };
+            static const uint8_t lengths[] = {3, 3, 3, 3, 4, 3, 3};
+            if (event.special < sizeof(sequences) / sizeof(sequences[0]))
+                tty_input_sequence(sequences[event.special], lengths[event.special]);
         } else {
             tty_handle_input_char(event.ch);
         }

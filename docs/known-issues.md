@@ -27,16 +27,16 @@ artifacts 路径:
 ## 当前登记
 
 ID: FLAKY-001
-状态: RESOLVED（2026-08-15；统一 runner 在 QEMU stop 状态下完成 VGA 原子快照）
+状态: RESOLVED（2026-08-15；Shell 启动前完成内核标记输出，启动后终端只由 TTY/Shell 更新）
 类型: flaky-test
 首次发现版本: ca8b1cc（全部 dirty worktree 修改纳入后的初始基线提交）
 影响 suite/case: boot.quiet；`make check-all` 中 `qemu-lba48` 后的 `qemu-boot-check`
 最小复现命令: `make qemu-lba48-check` 后执行 `bash -x tests/qemu_boot.sh`（需允许 QEMU Unix monitor socket）
-期望结果: VGA 快照同时包含 `[BOOT] kernel ready`、`[BOOT] storage ready`、`[BOOT] shell ready` 和 `orange:/$`
+期望结果: VGA 快照分别包含独占一行的 `[BOOT] launching shell`、`Orange/64 Terminal`，以及 `orange@orange-os:/$`
 实际结果: 偶尔在屏幕更新中间态读取 VGA，`[BOOT] shell ready` 被拆行并与 Shell 欢迎语交错，导致 grep 失败；独立重复 boot 可通过
 artifacts 路径: `build/baseline/2026-08/check-all-logs/06-boot-quiet.log`、`build/baseline/2026-08/check-all-logs-rerun/06-boot-quiet.log`、`build/baseline/2026-08/frozen-check-all/20260815-101349-176348-20260815/boot/quiet/1/`
 临时规避方式: 保留失败日志并单独重跑；不得用无限重试将其标记为通过
-关闭条件: 已满足；`e07f6a0` 的 `monitor_capture_vga_stopped` 在相同 seed 下完成默认 boot 和完整 runner 矩阵，最终 artifacts 位于 `build/baseline/2026-08/frozen-check-all-final2/20260815-101753-178844-20260815/`
+关闭条件: 已满足；除使用 `monitor_capture_vga_stopped` 获取稳定快照外，内核现在于 `execute_elf("shell.elf")` 前输出 `[BOOT] launching shell`，成功启动后不再与用户 Shell 竞争 TTY 光标；boot 测试同时断言启动标记和欢迎标题各自独占一行
 
 ID: FLAKY-002
 状态: RESOLVED（2026-08-15；等待 `run: child completed` 后再取资源快照）

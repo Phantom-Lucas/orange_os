@@ -76,6 +76,21 @@ void keyboard_handle_scancode(uint8_t scancode) {
             } else if (scancode == 0x51) {
                 event.type = KEYBOARD_EVENT_SCROLL_DOWN;
                 enqueue_event(event);
+            } else {
+                switch (scancode) {
+                case 0x4B: event.special = KEY_SPECIAL_LEFT; break;
+                case 0x4D: event.special = KEY_SPECIAL_RIGHT; break;
+                case 0x47: event.special = KEY_SPECIAL_HOME; break;
+                case 0x4F: event.special = KEY_SPECIAL_END; break;
+                case 0x53: event.special = KEY_SPECIAL_DELETE; break;
+                case 0x48: event.special = KEY_SPECIAL_UP; break;
+                case 0x50: event.special = KEY_SPECIAL_DOWN; break;
+                default: event.special = 0xFF; break;
+                }
+                if (event.special != 0xFF) {
+                    event.type = KEYBOARD_EVENT_SPECIAL;
+                    enqueue_event(event);
+                }
             }
         }
     } else if (scancode == 0x1D) {

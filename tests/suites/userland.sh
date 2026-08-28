@@ -45,7 +45,7 @@ suite_userland_core() {
     if ! grep -Fq 'libc-demo: allocator, strings, formatting passed' <<<"$output" ||
        ! grep -Fq 'libc-test: 13 passed, 0 failed' <<<"$output" ||
        ! grep -Fq 'argv-one argv-two' <<<"$output" ||
-       ! grep -Fq 'PID  PPID STATE THREADS NAME' <<<"$output" ||
+       ! grep -Fq 'PID  PPID STATE THREADS NAME USERPAGES' <<<"$output" ||
        ! grep -Fq 'libc-demo.elf' <<<"$output"; then
         printf '%s\n' "$output" >&2
         return 1

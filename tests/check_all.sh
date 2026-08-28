@@ -14,9 +14,8 @@ run_step() {
     shift
     step=$((step + 1))
     local log="$LOG_DIR/$(printf '%02d' "$step")-$name.log"
-    # 默认的同步矩阵是 100 轮、每轮 20,000 次操作，真实 QEMU 运行时间
-    # 明显长于普通编译/冒烟步骤；不能用统一的 300 秒误杀它。最终集成
-    # 还包含同一套同步与 VM 回归，因此给出更宽的独立上限。
+    # 默认 full 同步矩阵是 10 轮、每轮 20,000 次操作；100 轮 soak 已
+    # 独立进入 test-stress。集成还包含同步与 VM 回归，保留独立上限。
     case "$name" in
         sync) step_timeout="${SYNC_CHECK_TIMEOUT:-900}" ;;
         integration) step_timeout="${INTEGRATION_CHECK_TIMEOUT:-1200}" ;;
@@ -42,10 +41,10 @@ run_step filesystem make qemu-fs-check
 run_step shell-tty make qemu-shell-fs-check
 run_step userland make qemu-userland-check
 run_step input-stress make qemu-input-stress-check
-run_step sync env SYNC_TEST_ROUNDS="${SYNC_TEST_ROUNDS:-100}" \
+run_step sync env SYNC_TEST_ROUNDS="${SYNC_TEST_ROUNDS:-10}" \
     SYNC_WORKER_ROUNDS="${SYNC_WORKER_ROUNDS:-20000}" make qemu-sync-check
 run_step virtual-memory env VM_TEST_ROUNDS="${VM_TEST_ROUNDS:-32}" make qemu-vm-check
-run_step integration env SYNC_TEST_ROUNDS="${SYNC_TEST_ROUNDS:-100}" \
+run_step integration env SYNC_TEST_ROUNDS="${SYNC_TEST_ROUNDS:-10}" \
     SYNC_WORKER_ROUNDS="${SYNC_WORKER_ROUNDS:-20000}" \
     VM_TEST_ROUNDS="${VM_TEST_ROUNDS:-32}" make qemu-check
 

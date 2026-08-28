@@ -18,9 +18,23 @@
 #include "keyboard.h"
 #include "ipc.h"
 #include "futex.h"
+#include "qemu_fb.h"
+
+extern uint8_t __bss_start[];
+extern uint8_t __bss_end[];
+
+static void clear_kernel_bss(void) {
+    volatile uint8_t* cursor = __bss_start;
+    while (cursor < __bss_end) {
+        *cursor++ = 0;
+    }
+}
 
 __attribute__((section(".entry_point")))
 void kernel_main(void) {
+    /* A raw-binary loader does not materialize ELF NOBITS sections.  QEMU
+       normally supplies zeroed RAM, but the kernel ABI must not depend on it. */
+    clear_kernel_bss();
     print_init();
     clear_screen();
 #if BOOT_DIAGNOSTIC
@@ -91,6 +105,15 @@ void kernel_main(void) {
 #endif
     fs_service_init();
 
+    /* The font is a MyFS asset, so framebuffer activation intentionally happens
+       only after a successful mount.  A failed probe leaves the established VGA
+       TTY untouched and therefore diagnosable. */
+    if (qemu_fb_initialize() == 0) {
+        if (tty_use_framebuffer_geometry(qemu_fb_geometry()) == 0) {
+            print_success("[FB] QEMU framebuffer active\n");
+        }
+    }
+
 #if BOOT_DIAGNOSTIC
     int init_pid = execute_elf("hello.elf");
     int init_ok = 0;
@@ -128,13 +151,15 @@ void kernel_main(void) {
         while (1) __asm__ volatile ("hlt");
     }
 
+    /*
+     * 用户 Shell 一旦进入就会通过 TTY 输出欢迎页。启动它之后再由内核
+     * 打印会与用户输出竞争 TTY 光标，造成启动标记和标题粘连。把“准备
+     * 启动”标记放在 execute_elf() 前，并在成功后把终端完全交给 Shell。
+     */
+    print_success("[BOOT] launching shell\n");
+
     // 正常交互入口改为 Ring 3 shell；内核 shell 仅保留为加载失败时的调试后备。
     if (execute_elf("shell.elf") >= 0) {
-#if BOOT_DIAGNOSTIC
-        print_success("[BOOT] Shell ready\n");
-#else
-        print_success("[BOOT] shell ready\n");
-#endif
         thread_yield();
         while (1) __asm__ volatile ("hlt");
     }

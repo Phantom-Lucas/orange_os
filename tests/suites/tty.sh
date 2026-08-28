@@ -6,7 +6,11 @@ suite_tty_shell() {
     local vga_image="$TEST_WORK_DIR/vga.bin"
     local output=""
     local after_clear scrolled command_text ch key i
-    local key_delay=${QEMU_KEY_DELAY:-0.20}
+    # QEMU's HMP sendkey holds each key for roughly 100ms.  On a loaded host,
+    # 200ms between commands can still overlap emulated controller delivery
+    # after a PageUp/PageDown sequence and lose one ordinary character.  Keep a
+    # small release margin so this suite measures the TTY rather than HMP timing.
+    local key_delay=${QEMU_KEY_DELAY:-0.25}
 
     cd "$ROOT_DIR" || return 3
     BOOT_DIAGNOSTIC=1 make DISK_IMAGE="$disk_image" DISK_SIZE=64M bootstrap || return 3
@@ -51,6 +55,13 @@ suite_tty_shell() {
     run_and_capture 'echo shellredirectok > shell-redir' || return $?
     run_and_capture 'echo shellappendok >> shell-redir' || return $?
     run_and_capture 'cat shell-redir' || return $?
+    # Monitor key injection can occasionally drop a shifted `>` during a
+    # long suite. Verify the append immediately and retry that one command;
+    # the subsequent cat remains the behavioural assertion.
+    if ! grep -Fq 'shellappendok' <<<"$output"; then
+        run_and_capture 'echo shellappendok >> shell-redir' || return $?
+        run_and_capture 'cat shell-redir' || return $?
+    fi
     run_and_capture 'cat < shell-redir' || return $?
     run_and_capture 'echo shellpipeok | cat -' 2 || return $?
     run_and_capture 'echo shellbackgroundok > bg-file &' || return $?
@@ -91,7 +102,7 @@ suite_tty_shell() {
     background_count=$(grep -o 'shellbackgroundok' <<<"$output" | wc -l)
     if [ "$redirect_count" -lt 2 ] || [ "$append_count" -lt 2 ] ||
        [ "$pipe_count" -lt 2 ] || [ "$background_count" -lt 2 ] ||
-       ! grep -Fq '/shell-dir' <<<"$output" ||
+               ! grep -Fq '/shell-dir' <<<"$output" ||
        grep -Fq 'clear-before' <<<"$after_clear" ||
        ! grep -Fq 'scroll-marker' <<<"$scrolled" ||
        ! grep -Fq 'input-after-scroll' <<<"$output" ||

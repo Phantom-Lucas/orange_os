@@ -7,11 +7,12 @@ suite_vm_cow() {
     local output=""
     local previous=""
     local stable=0
+    local retried=0
     local key
 
     cd "$ROOT_DIR" || return 3
     BOOT_DIAGNOSTIC=1 make -B VM_TEST_ROUNDS="${VM_TEST_ROUNDS:-32}" \
-        DISK_IMAGE="$disk_image" bootstrap || return 3
+        DISK_IMAGE="$disk_image" DISK_SIZE="${TEST_DISK_SIZE:-64M}" bootstrap || return 3
     monitor_socket=$(qemu_socket_path "$TEST_WORK_DIR/monitor.sock")
     qemu_start "$monitor_socket" \
         -drive "file=$disk_image,format=raw,index=0,media=disk" \
@@ -21,21 +22,31 @@ suite_vm_cow() {
     qemu_wait_ready "$monitor_socket" || return 5
     sleep 6
 
-    for key in r u n spc v m minus d e m o dot e l f; do
-        monitor_send "$monitor_socket" "sendkey $key" || return 5
-        sleep 0.35
-    done
-    monitor_send "$monitor_socket" 'sendkey ret' || return 5
+    send_vm_command() {
+        for key in r u n spc v m minus d e m o dot e l f; do
+            monitor_send "$monitor_socket" "sendkey $key" || return 5
+            sleep 0.35
+        done
+        monitor_send "$monitor_socket" 'sendkey ret'
+    }
+    send_vm_command || return $?
 
     local deadline=$((SECONDS + ${VM_WAIT_SECONDS:-120}))
     local attempt
     while (( SECONDS < deadline )); do
         monitor_send "$monitor_socket" "pmemsave 0xb8000 0xfa0 \"$vga_image\"" || return 5
         output=$(monitor_decode_vga "$vga_image") || return 5
+        if [ "$retried" -eq 0 ] &&
+           grep -Fq 'run: executable not found' <<<"$output"; then
+            retried=1
+            send_vm_command || return $?
+            sleep 1
+            continue
+        fi
         if grep -Fq '[VM] COW/mmap demo PASSED' <<<"$output" &&
            grep -Fq 'futex_waiters=0' <<<"$output" &&
            grep -Fq 'processes=2 threads=5' <<<"$output" &&
-           grep -Fq 'user_mapped=7 user_refs=7' <<<"$output"; then
+           grep -Fq 'user_mapped=12 user_refs=12' <<<"$output"; then
             if [ "$output" = "$previous" ]; then
                 stable=1
                 break

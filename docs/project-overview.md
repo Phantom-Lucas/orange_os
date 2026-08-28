@@ -86,6 +86,10 @@ make BOOT_DIAGNOSTIC=1 run
 
 ### 4.3 终端、键盘与控制台
 
+- 默认交互界面使用 QEMU framebuffer（1280×720、102×28、深紫主题）；VGA 文本仅作为
+  `BOOT_DIAGNOSTIC=1`、自动测试和 `CONSOLE_BACKEND=vga` 的回退后端。
+- framebuffer renderer 保存可见字符网格，只重绘改变的字形与旧/新光标，避免每次输入
+  清屏重绘造成的闪烁和卡顿。
 - 三个内存后备 VGA 文本控制台，按 F1/F2/F3 切换并保留各自历史画面。
 - PS/2 键盘扫描码解析，支持普通键、Shift、Caps Lock、退格、回车和控制台切换。
 - IRQ1 只负责将字符压入键盘队列；TTY 输入服务阻塞等待字符并回复 `read(0, ...)` 请求。
@@ -196,7 +200,13 @@ make bootstrap
 make run
 ```
 
-当前默认启动配置是 `hd8G.img`、QEMU 1GiB 内存和 1 个虚拟 CPU。
+当前默认启动配置是 `build/images/orange-dev.img`（256MiB）、QEMU 1GiB 内存和 1 个虚拟 CPU；
+交互界面默认使用 QEMU framebuffer 现代 Shell，而非 VGA 文本显示。需要旧文本回退时可运行
+`make CONSOLE_BACKEND=vga run`。
+
+有关图形 Shell、增量渲染和帧缓冲模式的当前细节，优先阅读
+[`adaptive-framebuffer-modern-shell-implementation.md`](adaptive-framebuffer-modern-shell-implementation.md)；
+镜像清理和容量规范见 [`image-storage.md`](image-storage.md)。
 
 QEMU 资源可以通过 Make 变量设置：
 
@@ -210,8 +220,8 @@ make DISK_IMAGE=hd128M.img QEMU_MEMORY=1G QEMU_CPUS=1 run
 ```
 
 这里要区分两层容量：`DISK_SIZE` 是整个 QEMU 磁盘镜像的逻辑大小，MyFS 从
-`FS_START_LBA` 开始，按剩余空间动态计算块数、位图和 inode 表。默认 8GiB 镜像
-会生成约 8.0GiB 的 MyFS 区域（扣除起始保留区和动态元数据），不再固定为 16MiB。
+`FS_START_LBA` 开始，按剩余空间动态计算块数、位图和 inode 表。默认 256MiB 镜像
+会生成约 254MiB 的 MyFS 区域（扣除起始保留区和动态元数据），不再固定为 16MiB。
 已有镜像不会被 `DISK_SIZE` 自动扩容；要改变容量应指定新的 `DISK_IMAGE` 并重新
 执行 `bootstrap`，这会重建文件系统并清除旧文件。
 

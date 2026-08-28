@@ -33,7 +33,13 @@ SECTIONS
 
     .bss : AT(ADDR(.bss) - KERNEL_VMA)
     {
+        __bss_start = .;
         *(COMMON)
         *(.bss*)
+        __bss_end = .;
     }
+
+    /* Absolute physical end used by the build gate.  The loader's page tables
+       begin at 0x70000, so both file-backed sections and .bss must end below it. */
+    __kernel_phys_end = . - KERNEL_VMA;
 }

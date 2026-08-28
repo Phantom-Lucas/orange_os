@@ -140,7 +140,7 @@ make DISK_IMAGE="$DISK_IMAGE" bootstrap >/dev/null
 # 首次启动会运行 fork/exit/wait 自检；通过后才会进入用户态 Shell。
 start_qemu
 first_boot=$(capture_and_stop)
-assert_contains "$first_boot" "Orange'S user shell ready"
+assert_contains "$first_boot" "Orange/64 Terminal"
 
 # 写入文件后重启，确认 MyFS 真实持久化而不是仅内存缓存。
 start_qemu

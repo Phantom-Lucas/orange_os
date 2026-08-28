@@ -42,7 +42,7 @@ assert_contains() {
 
 first=$(boot_once)
 assert_contains "$first" "fs demo PASSED" first-demo
-assert_contains "$first" "Orange'S user shell ready" first-shell
+assert_contains "$first" "Orange/64 Terminal" first-shell
 assert_contains "$first" "file_objects=0 pipe_objects=0" first-files
 # MyFS v4 按实际 inode 数量保留一个永久 inode 引用表；它属于文件系统
 # 常驻对象，不是用户操作泄漏。64MiB 测试镜像的 4096 个 inode 使用

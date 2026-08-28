@@ -1,13 +1,51 @@
 #include "syscall.h"
+#include "term.h"
 
-#define LINE_SIZE 128
+#define LINE_SIZE 256
 #define IO_SIZE 512
+#define HISTORY_SIZE 64
 
 /* 提示符只在 cd 成功后刷新，避免每次命令完成都额外发起一次 FS IPC。 */
 static char prompt_cwd[LINE_SIZE] = "/";
+/* ANSI remains an optional independent capability; the theme does not depend on it. */
+static int style_enabled = 0;
+
+struct shell_editor {
+    char line[LINE_SIZE];
+    unsigned long length;
+    unsigned long cursor;
+    char history[HISTORY_SIZE][LINE_SIZE];
+    unsigned long history_count;
+    long history_view;
+    char draft[LINE_SIZE];
+    char kill_ring[LINE_SIZE];
+    unsigned long previous_render_length;
+    int suggestion_index;
+    int escape_state;
+    char search[LINE_SIZE];
+    unsigned long search_length;
+    char search_saved[LINE_SIZE];
+    int search_active;
+    long search_index;
+};
+
+static struct shell_editor editor;
+
+static unsigned long text_length(const char* text);
 
 static void write_text(const char* text, unsigned long length) {
     (void)sys_write(1, text, length);
+}
+
+static void write_styled(const char* style, const char* text,
+                         unsigned long length) {
+    if (style_enabled) write_text(style, text_length(style));
+    write_text(text, length);
+    if (style_enabled) write_text(RESET, text_length(RESET));
+}
+
+static void write_styled_text(const char* style, const char* text) {
+    write_styled(style, text, text_length(text));
 }
 
 static unsigned long text_length(const char* text) {
@@ -32,11 +70,11 @@ static int starts_with(const char* text, const char* prefix) {
 }
 
 static void prompt(void) {
-    static const char prefix[] = "orange:";
+    static const char prefix[] = "orange@orange-os:";
 
-    write_text(prefix, sizeof(prefix) - 1);
-    write_text(prompt_cwd, text_length(prompt_cwd));
-    write_text("$ ", 2);
+    write_styled(CYAN, prefix, sizeof(prefix) - 1);
+    write_styled(BLUE, prompt_cwd, text_length(prompt_cwd));
+    write_styled(YELLOW, "$ ", 2);
 }
 
 static void refresh_prompt_cwd(void) {
@@ -57,15 +95,32 @@ static void cancel_line(const char* marker) {
     write_text(marker, text_length(marker));
 }
 
+static void draw_welcome(void) {
+    write_styled_text(YELLOW, "Orange/64 Terminal\n");
+    write_styled_text(MUTED, "Type 'help' to list commands.\n\n");
+}
+
 static void print_help(void) {
     static const char help[] =
-        "commands: help, ls, echo <text>, write <file> <text>, cat <file>,\n"
-        "          mkdir <dir>, cd <dir>, pwd, stat <file>, rm <file>,\n"
-        "          run <elf>, exec <elf>, clear, exit\n"
-        "keys: PageUp/PageDown scroll history, F1/F2/F3 switch console\n"
-        "controls: Ctrl+C quit foreground, Ctrl+L clear, Ctrl+U line,\n"
-        "         Ctrl+W word, Ctrl+D exit on empty line\n";
-    write_text(help, sizeof(help) - 1);
+        "Commands:\n"
+        "  help              show this help\n"
+        "  ls                list directory\n"
+        "  cat <file>        print file\n"
+        "  echo <text>       print text\n"
+        "  mkdir <dir>       create directory\n"
+        "  cd <dir>          change directory\n"
+        "  pwd               print working directory\n"
+        "  ps                list processes\n"
+        "  run <program>     start a program\n"
+        "  clear             clear terminal\n"
+        "\n"
+        "Keyboard:\n"
+        "  F1-F3             switch console\n"
+        "  PgUp/PgDn         scroll history\n"
+        "  Ctrl+L            clear screen\n"
+        "  Ctrl+C            interrupt foreground process\n"
+        "\n";
+    write_styled_text(MUTED, help);
 }
 
 static void command_ls(void) {
@@ -274,6 +329,8 @@ static void run_pipeline(char* line, char* separator) {
     }
     child = sys_fork();
     if (child == 0) {
+        /* The left side writes to a pipe, never to a terminal. */
+        style_enabled = 0;
         (void)sys_close(fds[0]);
         if (sys_dup2(fds[1], 1) < 0) sys_exit(127);
         (void)sys_close(fds[1]);
@@ -315,7 +372,10 @@ static void run_redirected(char* line, char* separator, int append) {
         return;
     }
     (void)sys_close((int)fd);
+    int previous_style = style_enabled;
+    style_enabled = 0;
     run_command(line);
+    style_enabled = previous_style;
     /* 标准输出为空时由内核回退到 TTY。 */
     (void)sys_close(1);
 }
@@ -337,7 +397,10 @@ static void run_input_redirected(char* line, char* separator)
         return;
     }
     (void)sys_close((int)fd);
+    int previous_style = style_enabled;
+    style_enabled = 0;
     run_command(line);
+    style_enabled = previous_style;
     (void)sys_close(0);
 }
 
@@ -392,19 +455,186 @@ static void run_command(char* line) {
     else if (starts_with(line, "rm ")) {
         if (sys_unlink(line + 3) != 0) write_text("rm: file not found\n", 19);
     } else if (starts_with(line, "run ")) command_run(line + 4);
+    else if (text_equal(line, "demo")) command_run("showcase.elf");
     else if (starts_with(line, "exec ")) command_exec(line + 5);
     else if (text_equal(line, "clear")) (void)sys_clear();
+    else if (text_equal(line, "about")) {
+        (void)sys_clear();
+        draw_welcome();
+    }
     else if (text_equal(line, "exit")) sys_exit(0);
     else if (*line) command_external(line);
 }
 
+static void copy_text(char* destination, const char* source, unsigned long length) {
+    if (length >= LINE_SIZE) length = LINE_SIZE - 1;
+    for (unsigned long i = 0; i < length; i++) destination[i] = source[i];
+    destination[length] = '\0';
+}
+
+static int contains_text(const char* text, const char* needle) {
+    if (!*needle) return 1;
+    for (; *text; text++) {
+        const char* a = text;
+        const char* b = needle;
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (!*b) return 1;
+    }
+    return 0;
+}
+
+static int editor_suggestion(void) {
+    if (editor.cursor != editor.length || editor.length == 0 || editor.search_active)
+        return -1;
+    for (long i = (long)editor.history_count - 1; i >= 0; i--) {
+        unsigned long j = 0;
+        while (j < editor.length && editor.history[i][j] == editor.line[j]) j++;
+        if (j == editor.length && editor.history[i][j] != '\0') return (int)i;
+    }
+    return -1;
+}
+
+static void editor_redraw(void) {
+    unsigned long visible = editor.length;
+    editor.suggestion_index = editor_suggestion();
+    if (editor.suggestion_index >= 0) {
+        unsigned long suggestion_length = text_length(editor.history[editor.suggestion_index]);
+        if (suggestion_length > visible) visible = suggestion_length;
+    }
+    write_text("\r", 1);
+    prompt();
+    write_text(editor.line, editor.length);
+    if (editor.suggestion_index >= 0) {
+        const char* suffix = editor.history[editor.suggestion_index] + editor.length;
+        write_styled(MUTED, suffix, text_length(suffix));
+    }
+    while (visible < editor.previous_render_length) { write_text(" ", 1); visible++; }
+    write_text("\r", 1);
+    prompt();
+    write_text(editor.line, editor.cursor);
+    editor.previous_render_length = visible;
+}
+
+static void editor_clear(void) {
+    editor.length = 0; editor.cursor = 0; editor.line[0] = '\0';
+    editor.history_view = -1; editor.previous_render_length = 0;
+}
+
+static void editor_insert(const char* text, unsigned long length) {
+    if (length > LINE_SIZE - 1 - editor.length) length = LINE_SIZE - 1 - editor.length;
+    for (unsigned long i = editor.length; i > editor.cursor; i--)
+        editor.line[i + length - 1] = editor.line[i - 1];
+    for (unsigned long i = 0; i < length; i++) editor.line[editor.cursor + i] = text[i];
+    editor.length += length; editor.cursor += length; editor.line[editor.length] = '\0';
+}
+
+static void editor_delete(unsigned long start, unsigned long end) {
+    if (start > editor.length) start = editor.length;
+    if (end > editor.length) end = editor.length;
+    if (end < start) end = start;
+    for (unsigned long i = end; i <= editor.length; i++) editor.line[start + i - end] = editor.line[i];
+    editor.length -= end - start;
+    if (editor.cursor > end) editor.cursor -= end - start;
+    else if (editor.cursor > start) editor.cursor = start;
+}
+
+static void editor_store_history(void) {
+    if (!editor.length || (editor.history_count &&
+        text_equal(editor.history[editor.history_count - 1], editor.line))) return;
+    if (editor.history_count == HISTORY_SIZE) {
+        for (unsigned long i = 1; i < HISTORY_SIZE; i++)
+            copy_text(editor.history[i - 1], editor.history[i], text_length(editor.history[i]));
+        editor.history_count--;
+    }
+    copy_text(editor.history[editor.history_count++], editor.line, editor.length);
+}
+
+static void editor_history_previous(void) {
+    if (!editor.history_count) return;
+    if (editor.history_view < 0) {
+        copy_text(editor.draft, editor.line, editor.length);
+        editor.history_view = (long)editor.history_count - 1;
+    } else if (editor.history_view > 0) editor.history_view--;
+    copy_text(editor.line, editor.history[editor.history_view],
+              text_length(editor.history[editor.history_view]));
+    editor.length = text_length(editor.line); editor.cursor = editor.length;
+}
+
+static void editor_history_next(void) {
+    if (editor.history_view < 0) return;
+    if ((unsigned long)(editor.history_view + 1) < editor.history_count) {
+        editor.history_view++;
+        copy_text(editor.line, editor.history[editor.history_view],
+                  text_length(editor.history[editor.history_view]));
+    } else {
+        editor.history_view = -1;
+        copy_text(editor.line, editor.draft, text_length(editor.draft));
+    }
+    editor.length = text_length(editor.line); editor.cursor = editor.length;
+}
+
+static void editor_kill(unsigned long start, unsigned long end) {
+    if (end < start) end = start;
+    copy_text(editor.kill_ring, editor.line + start, end - start);
+    editor_delete(start, end);
+}
+
+static void editor_complete(void) {
+    static const char* commands[] = {"about", "cat", "cd", "clear", "demo", "echo",
+        "exec", "exit", "help", "ls", "mkdir", "ps", "pwd", "rm", "run", "stat", "write"};
+    unsigned long prefix = 0, matches = 0, common = 0;
+    const char* first = 0;
+    while (prefix < editor.length && editor.line[prefix] != ' ') prefix++;
+    if (prefix != editor.length) return;
+    for (unsigned long i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+        unsigned long j = 0;
+        while (j < prefix && commands[i][j] == editor.line[j]) j++;
+        if (j != prefix) continue;
+        if (!matches) { common = text_length(commands[i]); first = commands[i]; }
+        else {
+            unsigned long k = 0;
+            while (k < common && commands[i][k] == first[k]) k++;
+            common = k;
+        }
+        matches++;
+    }
+    if (!matches) return;
+    const char* base = 0;
+    for (unsigned long i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+        unsigned long j = 0; while (j < prefix && commands[i][j] == editor.line[j]) j++;
+        if (j == prefix) { base = commands[i]; break; }
+    }
+    if (base && common > prefix) editor_insert(base + prefix, common - prefix);
+    if (matches == 1) editor_insert(" ", 1);
+}
+
+static int editor_search_find(int older) {
+    long start = editor.search_index;
+    if (start < 0 || !older) start = (long)editor.history_count - 1;
+    else start--;
+    for (long i = start; i >= 0; i--) {
+        if (contains_text(editor.history[i], editor.search)) {
+            editor.search_index = i;
+            copy_text(editor.line, editor.history[i], text_length(editor.history[i]));
+            editor.length = text_length(editor.line); editor.cursor = editor.length;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void editor_search_redraw(void) {
+    write_text("\r(reverse-i-search)`", text_length("\r(reverse-i-search)`"));
+    write_text(editor.search, editor.search_length);
+    write_text("': ", 3);
+    write_text(editor.line, editor.length);
+}
+
 void _start(void) {
-    char line[LINE_SIZE];
     char input[LINE_SIZE];
-    char echo[LINE_SIZE];
-    unsigned long length = 0;
     long input_length;
-    write_text("Orange'S user shell ready. Type 'help'.\n", 40);
+    draw_welcome();
+    editor_clear();
     prompt();
     while (1) {
         /*
@@ -415,98 +645,108 @@ void _start(void) {
         input_length = sys_read(0, input, sizeof(input));
         if (input_length <= 0) continue;
 
-        unsigned long echo_length = 0;
         for (long input_index = 0; input_index < input_length; input_index++) {
             char ch = input[input_index];
+            if (editor.escape_state == 1) {
+                editor.escape_state = ch == '[' ? 2 : 0;
+                continue;
+            }
+            if (editor.escape_state == 2) {
+                if (ch == '3') { editor.escape_state = 3; continue; }
+                editor.escape_state = 0;
+                if (ch == 'A') editor_history_previous();
+                else if (ch == 'B') editor_history_next();
+                else if (ch == 'C') {
+                    if (editor.cursor < editor.length) editor.cursor++;
+                    else if (editor.suggestion_index >= 0)
+                        editor_insert(editor.history[editor.suggestion_index] + editor.length,
+                                      text_length(editor.history[editor.suggestion_index]) - editor.length);
+                } else if (ch == 'D' && editor.cursor) editor.cursor--;
+                else if (ch == 'H') editor.cursor = 0;
+                else if (ch == 'F') {
+                    if (editor.suggestion_index >= 0)
+                        editor_insert(editor.history[editor.suggestion_index] + editor.length,
+                                      text_length(editor.history[editor.suggestion_index]) - editor.length);
+                    else editor.cursor = editor.length;
+                }
+                editor_redraw();
+                continue;
+            }
+            if (editor.escape_state == 3) {
+                editor.escape_state = 0;
+                if (ch == '~') { editor_delete(editor.cursor, editor.cursor + 1); editor_redraw(); }
+                continue;
+            }
+            if (ch == '\033') { editor.escape_state = 1; continue; }
 
-            if (ch == 0x03) {          /* Ctrl+C: cancel an input line. */
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
+            if (editor.search_active) {
+                if (ch == 0x03) {
+                    copy_text(editor.line, editor.search_saved, text_length(editor.search_saved));
+                    editor.length = text_length(editor.line); editor.cursor = editor.length;
+                    editor.search_active = 0; editor_redraw();
+                } else if (ch == '\r' || ch == '\n') {
+                    editor.search_active = 0; write_text("\n", 1); editor.previous_render_length = 0; prompt(); editor_redraw();
+                } else if (ch == 0x12) {
+                    (void)editor_search_find(1); editor_search_redraw();
+                } else if (ch == '\b' && editor.search_length) {
+                    editor.search[--editor.search_length] = '\0'; editor.search_index = -1;
+                    (void)editor_search_find(0); editor_search_redraw();
+                } else if (ch >= 32 && ch < 127 && editor.search_length + 1 < LINE_SIZE) {
+                    editor.search[editor.search_length++] = ch; editor.search[editor.search_length] = '\0';
+                    editor.search_index = -1; (void)editor_search_find(0); editor_search_redraw();
                 }
-                erase_line_range(length);
+                continue;
+            }
+
+            if (ch == 0x03) {
                 cancel_line("^C\n");
-                length = 0;
+                editor_clear();
                 prompt();
-            } else if (ch == 0x1C) {   /* Ctrl+\\: SIGQUIT-style line cancel. */
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
-                }
-                erase_line_range(length);
+            } else if (ch == 0x1C) {
                 cancel_line("^\\\n");
-                length = 0;
+                editor_clear();
                 prompt();
-            } else if (ch == 0x1A) {   /* Ctrl+Z: no job-control stop state yet. */
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
-                }
-                erase_line_range(length);
+            } else if (ch == 0x1A) {
                 cancel_line("^Z\n");
-                length = 0;
+                editor_clear();
                 prompt();
-            } else if (ch == 0x0C) {   /* Ctrl+L: clear and redraw the input. */
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
-                }
+            } else if (ch == 0x0C) {
                 (void)sys_clear();
-                prompt();
-                write_text(line, length);
-            } else if (ch == 0x15) {   /* Ctrl+U: erase the whole input line. */
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
-                }
-                erase_line_range(length);
-                length = 0;
-            } else if (ch == 0x17) {   /* Ctrl+W: erase the previous word. */
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
-                }
-                while (length != 0 && line[length - 1] == ' ') {
-                    length--;
-                    write_text("\b", 1);
-                }
-                while (length != 0 && line[length - 1] != ' ') {
-                    length--;
-                    write_text("\b", 1);
-                }
-            } else if (ch == 0x04) {   /* Ctrl+D: EOF at an empty Shell prompt. */
-                if (length == 0) sys_exit(0);
+                editor.previous_render_length = 0; editor_redraw();
+            } else if (ch == 0x01) { editor.cursor = 0; editor_redraw();
+            } else if (ch == 0x05) { editor.cursor = editor.length; editor_redraw();
+            } else if (ch == 0x15) { editor_kill(0, editor.cursor); editor_redraw();
+            } else if (ch == 0x0B) { editor_kill(editor.cursor, editor.length); editor_redraw();
+            } else if (ch == 0x17) {
+                unsigned long start = editor.cursor;
+                while (start && editor.line[start - 1] == ' ') start--;
+                while (start && editor.line[start - 1] != ' ') start--;
+                editor_kill(start, editor.cursor); editor_redraw();
+            } else if (ch == 0x19) { editor_insert(editor.kill_ring, text_length(editor.kill_ring)); editor_redraw();
+            } else if (ch == 0x12) {
+                copy_text(editor.search_saved, editor.line, editor.length);
+                editor.search_active = 1; editor.search_length = 0; editor.search[0] = '\0'; editor.search_index = -1;
+                (void)editor_search_find(0); editor_search_redraw();
+            } else if (ch == '\t') { editor_complete(); editor_redraw();
+            } else if (ch == 0x04) {
+                if (editor.length == 0) sys_exit(0);
             } else if (ch == '\r' || ch == '\n') {
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
-                }
                 write_text("\n", 1);
-                line[length] = '\0';
-                run_command(line);
+                editor.line[editor.length] = '\0';
+                editor_store_history();
+                run_command(editor.line);
                 {
                     int status = 0;
                     /* 回收后台任务；没有僵尸时 WAIT_NOHANG 立即返回。 */
                     while (sys_wait_nohang(0, &status) > 0) { }
                 }
-                length = 0;
+                editor_clear();
                 prompt();
             } else if (ch == '\b') {
-                if (echo_length != 0) {
-                    write_text(echo, echo_length);
-                    echo_length = 0;
-                }
-                if (length) {
-                    length--;
-                    write_text("\b", 1);
-                }
-            } else if (length + 1 < sizeof(line)) {
-                line[length++] = ch;
-                if (echo_length < sizeof(echo)) echo[echo_length++] = ch;
+                if (editor.cursor) { editor_delete(editor.cursor - 1, editor.cursor); editor_redraw(); }
+            } else if (ch >= 32 && ch < 127) {
+                editor_insert(&ch, 1); editor_redraw();
             }
-        }
-        if (echo_length != 0) {
-            write_text(echo, echo_length);
         }
     }
 }

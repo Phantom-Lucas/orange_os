@@ -33,11 +33,12 @@ output=$(od -An -v -w2 -tu1 "$VGA_IMAGE" |
 
 grep -Fq "[BOOT] kernel ready" <<<"$output"
 grep -Fq "[BOOT] storage ready" <<<"$output"
-grep -Fq "[BOOT] shell ready" <<<"$output"
-grep -Fq "orange:/$" <<<"$output"
+grep -Eq '^\[BOOT\] launching shell[[:space:]]*$' <<<"$output"
+grep -Eq '^Orange/64 Terminal[[:space:]]*$' <<<"$output"
+grep -Fq "orange@orange-os:/$" <<<"$output"
 if grep -Eq '\[RUNTIME\]|\[ELF\] Attempting|ATA (read|write) timeout|MBR Magic' <<<"$output"; then
     printf '%s\n' "$output" >&2
     echo "[qemu-boot] quiet startup leaked diagnostic output or storage errors" >&2
     exit 1
 fi
-echo "[qemu-boot] quiet startup, storage gate and shell readiness: PASSED"
+echo "[qemu-boot] quiet startup, storage gate and shell handoff: PASSED"

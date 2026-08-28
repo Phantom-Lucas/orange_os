@@ -11,18 +11,19 @@ suite_integration_smoke() {
     local text ch key i
 
     cd "$ROOT_DIR" || return 3
-    BOOT_DIAGNOSTIC=1 make -B \
-        SYNC_TEST_ROUNDS="${SYNC_TEST_ROUNDS:-100}" \
+    BOOT_DIAGNOSTIC=1 make -B DISK_SIZE="${TEST_DISK_SIZE:-64M}" \
+        SYNC_TEST_ROUNDS="${SYNC_TEST_ROUNDS:-10}" \
         SYNC_WORKER_ROUNDS="${SYNC_WORKER_ROUNDS:-20000}" \
         VM_TEST_ROUNDS="${VM_TEST_ROUNDS:-32}" check || return 3
     local fs_blocks
     fs_blocks=$(od -An -j 4116 -N 4 -tu4 "$ROOT_DIR/build/fs.img" | tr -d ' ')
-    [ "$fs_blocks" = 2097027 ] || {
+    [ "$fs_blocks" = 16259 ] || {
         printf '[integration.smoke] unexpected default MyFS block count: %s\n' "$fs_blocks" >&2
         return 1
     }
     monitor_socket=$(qemu_socket_path "$TEST_WORK_DIR/monitor.sock")
-    BOOT_DIAGNOSTIC=1 make DISK_IMAGE="$disk_image" bootstrap || return 3
+    BOOT_DIAGNOSTIC=1 make DISK_IMAGE="$disk_image" \
+        DISK_SIZE="${TEST_DISK_SIZE:-64M}" bootstrap || return 3
     trap 'qemu_stop' EXIT
 
     send_text() {
@@ -55,8 +56,12 @@ suite_integration_smoke() {
     }
 
     capture_and_stop() {
+        # A combined monitor write may let QEMU process `quit` before the
+        # asynchronous pmemsave has flushed.  Keep the capture and shutdown
+        # as ordered monitor transactions so reboot artifacts are non-empty.
         monitor_send "$monitor_socket" \
-            "pmemsave 0xb8000 0xfa0 \"$vga_image\"" quit || return 5
+            "pmemsave 0xb8000 0xfa0 \"$vga_image\"" || return 5
+        monitor_send "$monitor_socket" quit || return 5
         qemu_wait_exit
         monitor_decode_vga "$vga_image"
     }
@@ -96,7 +101,7 @@ suite_integration_smoke() {
     start_qemu || return $?
     capture_and_stop >"$TEST_WORK_DIR/first-boot.txt" || return $?
     first_boot=$(<"$TEST_WORK_DIR/first-boot.txt")
-    assert_contains "$first_boot" "Orange'S user shell ready" || return $?
+    assert_contains "$first_boot" "Orange/64 Terminal" || return $?
 
     start_qemu || return $?
     send_text 'write persist persist-hello' || return $?
@@ -147,7 +152,7 @@ suite_integration_smoke() {
     assert_contains "$sync_reaped" 'sync demo PASSED' || return $?
     assert_contains "$sync_reaped" 'futex_waiters=0' || return $?
     assert_contains "$sync_reaped" 'processes=2 threads=5' || return $?
-    assert_contains "$sync_reaped" 'user_mapped=7 user_refs=7' || return $?
+    assert_contains "$sync_reaped" 'user_mapped=12 user_refs=12' || return $?
 
     send_text 'run vm-demo.elf' || return $?
     vm_boot=$(wait_for_vga_contains '[VM] COW/mmap demo PASSED' "${VM_WAIT_SECONDS:-120}") || return $?
@@ -160,7 +165,7 @@ suite_integration_smoke() {
     verification_boot=$(<"$TEST_WORK_DIR/verification-boot.txt")
     assert_contains "$verification_boot" 'run: child completed' || return $?
     assert_contains "$verification_boot" 'processes=2 threads=5' || return $?
-    assert_contains "$verification_boot" 'user_mapped=7 user_refs=7' || return $?
+    assert_contains "$verification_boot" 'user_mapped=12 user_refs=12' || return $?
     assert_contains "$verification_boot" '[Ring 3] deliberate page fault' || return $?
     assert_contains "$verification_boot" 'run: child terminated by exception' || return $?
     printf '[integration.smoke] boot, fork, persistence, IPC, sync, VM and fault isolation: PASSED\n'

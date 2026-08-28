@@ -188,7 +188,13 @@ void execute_command(char* cmd) {
     else if (strcmp(cmd, "panic") == 0)
     {
         print_error("Initiating Kernel Panic (Divide by Zero)...\n");
-        volatile int a = 1 / 0; 
+        uint32_t divisor = 0;
+        /* Trigger #DE at runtime without relying on C undefined behaviour or
+           leaving a permanent -Wdiv-by-zero warning in release builds. */
+        __asm__ volatile("xorl %%edx, %%edx\n\t"
+                         "movl $1, %%eax\n\t"
+                         "divl %0"
+                         : : "r"(divisor) : "rax", "rdx", "memory");
     }
     else if (strcmp(cmd, "testpf") == 0) 
     {
