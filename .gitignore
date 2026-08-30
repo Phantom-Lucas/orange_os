@@ -11,3 +11,7 @@
 *out.txt
 *.log
 build/
+
+docs/
+
+design/
